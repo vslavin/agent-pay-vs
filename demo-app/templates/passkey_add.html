@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Agent Pay — Add a Passkey</title>
+  <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@700;900&family=Rajdhani:wght@300;500;600&family=Share+Tech+Mono&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/style.css">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+</head>
+<body>
+
+<div class="gear-bg">
+  <span class="g1">⚙</span><span class="g2">⚙</span>
+  <span class="g3">⚙</span><span class="g4">⚙</span><span class="g5">⚙</span>
+</div>
+
+<div class="stage">
+  <div class="panel">
+    <div class="rivets">
+      <span class="tl">◉</span><span class="tr">◉</span>
+      <span class="bl">◉</span><span class="br">◉</span>
+    </div>
+
+    <div class="top-bar">
+      <span class="gear-spin">⚙</span>
+      <div>
+        <div class="badge">Autonomous Payment System &nbsp;v1.0</div>
+        <div class="status"><span class="dot"></span>SESSION ACTIVE &nbsp;·&nbsp; AWAITING PHONE</div>
+      </div>
+    </div>
+
+    <div class="title">AGENT PAY</div>
+    <div class="subtitle">◈ &nbsp; Add a Passkey on Your Phone &nbsp; ◈</div>
+
+    <div class="qr-frame" id="qr-frame">
+      <div id="qr" role="img" aria-label="QR code to add a passkey on your phone"></div>
+      <div class="qr-done" id="qr-done" hidden>✔</div>
+    </div>
+
+    <p class="desc qr-desc" id="qr-msg">
+      Scan with your phone's camera. Sign in as <b><!-- USERNAME --></b> on the phone,
+      then save the new passkey (iCloud Keychain or 1Password).
+    </p>
+
+    <div class="qr-code-row">
+      <span class="info-label">Expires in</span>
+      <span class="qr-timer" id="qr-timer"></span>
+    </div>
+
+    <a class="btn btn-secondary" id="qr-refresh" href="/passkey/add" hidden>New QR code</a>
+    <a class="btn btn-secondary" href="/">Back</a>
+
+    <div class="footer">Keycloak AIA &nbsp;·&nbsp; WebAuthn &nbsp;·&nbsp; Passkeys</div>
+  </div>
+</div>
+
+<script>
+(function () {
+  var t = document.createElement("textarea");
+  t.innerHTML = "<!-- QR_URL -->"; var url = t.value;
+  t.innerHTML = "<!-- TOKEN -->";  var token = t.value;
+  var expires = Date.now() + <!-- EXPIRES --> * 1000;
+  var msg = document.getElementById("qr-msg"), timer = document.getElementById("qr-timer");
+
+  if (window.QRCode) {
+    new QRCode(document.getElementById("qr"), {
+      text: url, width: 220, height: 220,
+      colorDark: "#060402", colorLight: "#f4e4bc", correctLevel: QRCode.CorrectLevel.M
+    });
+  } else {
+    document.getElementById("qr").innerHTML = '<a class="qr-fallback" href="' + url + '">Open link</a>';
+  }
+
+  function finish(text, ok) {
+    msg.innerHTML = text;
+    document.getElementById("qr-frame").classList.add(ok ? "qr-ok" : "qr-dead");
+    if (ok) document.getElementById("qr-done").hidden = false;
+    else document.getElementById("qr-refresh").hidden = false;
+    timer.textContent = ""; clearInterval(clock);
+  }
+  function tick() {
+    var left = Math.max(0, Math.round((expires - Date.now()) / 1000));
+    timer.textContent = Math.floor(left / 60) + ":" + ("0" + left % 60).slice(-2);
+    return left;
+  }
+  var clock = setInterval(tick, 1000); tick();
+
+  function poll() {
+    fetch("/passkey/add/poll?t=" + encodeURIComponent(token), { credentials: "same-origin", cache: "no-store" })
+      .then(function (r) { return r.json(); })
+      .then(function (s) {
+        if (s.status === "done")           finish("Passkey added — your phone can now sign in to this account.", true);
+        else if (s.status === "cancelled") finish("Passkey setup was cancelled on the phone.", false);
+        else if (s.status === "mismatch")  finish("The phone signed in as a different user. Try again and sign in as <b><!-- USERNAME --></b>.", false);
+        else if (s.status === "error")     finish("The passkey could not be registered. Try again.", false);
+        else if (s.status === "expired")   finish("This QR code expired.", false);
+        else setTimeout(poll, 2500);
+      })
+      .catch(function () { setTimeout(poll, 4000); });
+  }
+  setTimeout(poll, 2500);
+}());
+</script>
+</body>
+</html>

@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Agent Pay — Authenticated</title>
+  <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@700;900&family=Rajdhani:wght@300;500;600&family=Share+Tech+Mono&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+
+<div class="gear-bg">
+  <span class="g1">⚙</span><span class="g2">⚙</span>
+  <span class="g3">⚙</span><span class="g4">⚙</span><span class="g5">⚙</span>
+</div>
+<div class="steam-wrap" id="sw"></div>
+
+<div class="stage">
+  <div class="panel">
+    <div class="rivets">
+      <span class="tl">◉</span><span class="tr">◉</span>
+      <span class="bl">◉</span><span class="br">◉</span>
+    </div>
+
+    <div class="top-bar">
+      <span class="gear-spin">⚙</span>
+      <div>
+        <div class="badge">Autonomous Payment System &nbsp;v1.0</div>
+        <div class="status">
+          <span class="dot"></span>SESSION ACTIVE &nbsp;·&nbsp; PASSKEY VERIFIED
+        </div>
+      </div>
+    </div>
+
+    <div class="title">AGENT PAY</div>
+    <div class="subtitle">◈ &nbsp; Identity Confirmed &nbsp; ◈</div>
+
+    <!-- FLASH -->
+
+    <div class="verified">
+      <span class="verified-badge">✔ &nbsp; IDENTITY VERIFIED</span>
+    </div>
+
+    <div class="divider">AGENT CREDENTIALS</div>
+
+    <div class="info-row">
+      <span class="info-label">Name</span>
+      <span class="info-val"><!-- NAME --></span>
+    </div>
+    <div class="info-row">
+      <span class="info-label">Username</span>
+      <span class="info-val"><!-- USERNAME --></span>
+    </div>
+    <div class="info-row" style="margin-bottom: 32px">
+      <span class="info-label">Email</span>
+      <span class="info-val"><!-- EMAIL --></span>
+    </div>
+
+    <div class="btn-row">
+      <a class="btn" href="/passkey/add">Add passkey on phone</a>
+      <a class="btn" href="/passkey/add/local">Add passkey on this computer</a>
+    </div>
+    <a class="btn btn-secondary" href="/account/password">Change password</a>
+    <a class="btn btn-secondary" href="/logout">Log out</a>
+
+    <div class="footer">OIDC &nbsp;·&nbsp; WebAuthn &nbsp;·&nbsp; PKCE &nbsp;·&nbsp; Cross-Device &nbsp;·&nbsp; 1Password</div>
+  </div>
+</div>
+
+<script>
+(function () {
+  var c = document.getElementById('sw');
+  for (var i = 0; i < 22; i++) {
+    var p = document.createElement('div');
+    p.className = 'sp';
+    var sz = (4 + Math.random() * 9) + 'px';
+    p.style.cssText = 'left:' + (Math.random() * 100) + '%;width:' + sz + ';height:' + sz
+      + ';--d:' + (3 + Math.random() * 5) + 's;--dl:' + (Math.random() * 5) + 's';
+    c.appendChild(p);
+  }
+}());
+</script>
+</body>
+</html>
+

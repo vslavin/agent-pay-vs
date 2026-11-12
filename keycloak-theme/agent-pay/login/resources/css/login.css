@@ -1,0 +1,537 @@
+@import url('https://fonts.googleapis.com/css2?family=Cinzel:wght@700;900&family=Rajdhani:wght@300;500;600&family=Share+Tech+Mono&display=swap');
+
+/* ── Reset ───────────────────────────────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; }
+
+/* ── Body / background ───────────────────────────────────────────────────── */
+/* Keycloak's base theme puts its background image on <html>; override it so
+   scrolled-past areas and the big chevron shape don't show through. */
+html, html.login-pf {
+  background: #060402 !important;
+}
+body, body.login-pf {
+  background-color: #060402 !important;
+  background-image:
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='56' height='100'%3E%3Cpath d='M28 66L0 50V16L28 0l28 16v34L28 66zM28 100l-28-16V66l28 16 28-16v18L28 100z' fill='none' stroke='%23c8860a' stroke-opacity='0.07' stroke-width='1'/%3E%3C/svg%3E") !important;
+  background-size: 56px 100px !important;   /* base theme sets cover, which blew one hex tile up to full-page */
+  background-repeat: repeat !important;
+  background-attachment: fixed !important;
+  font-family: 'Rajdhani', sans-serif !important;
+  color: #d4aa60 !important;
+  min-height: 100vh;
+}
+
+/* Scanlines overlay */
+body::after {
+  content: '';
+  position: fixed; inset: 0; pointer-events: none; z-index: 9999;
+  background: repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(0,0,0,.035) 2px, rgba(0,0,0,.035) 4px);
+}
+
+/* ── Page layout ─────────────────────────────────────────────────────────── */
+.login-pf-page,
+#kc-container,
+div.container,
+div.container-fluid {
+  display: flex !important;
+  flex-direction: column !important;
+  align-items: center !important;
+  justify-content: center !important;
+  min-height: 100vh !important;
+  padding: 20px !important;
+}
+
+/* ── Card / panel ────────────────────────────────────────────────────────── */
+.card-pf,
+.login-pf-page .card,
+#kc-container-wrapper,
+div[class*="card"] {
+  background: linear-gradient(145deg, #1e1508, #0e0c06, #1a1208) !important;
+  border: 1px solid #c8860a !important;
+  border-radius: 4px !important;
+  box-shadow: 0 0 60px rgba(200,134,10,.18), 0 0 120px rgba(200,134,10,.08), inset 0 0 60px rgba(0,0,0,.5) !important;
+  color: #d4aa60 !important;
+  padding: 40px 48px !important;
+  max-width: 480px !important;
+  width: 100% !important;
+  animation: glow 4s ease-in-out infinite;
+  /* corner rivets via outline trick */
+  outline: none;
+  position: relative;
+}
+
+@keyframes glow {
+  0%, 100% { box-shadow: 0 0 60px rgba(200,134,10,.18), inset 0 0 60px rgba(0,0,0,.5); }
+  50%       { box-shadow: 0 0 90px rgba(232,160,32,.30), inset 0 0 60px rgba(0,0,0,.5); }
+}
+
+/* ── Header / realm name ─────────────────────────────────────────────────── */
+#kc-header,
+.login-pf-header,
+header.login-pf-header {
+  text-align: center !important;
+  margin-bottom: 8px !important;
+}
+
+#kc-header-wrapper,
+.login-pf-header h1,
+#kc-header h1 {
+  font-family: 'Cinzel', serif !important;
+  font-weight: 900 !important;
+  font-size: 36px !important;
+  letter-spacing: 3px !important;
+  background: linear-gradient(135deg, #e8a020, #c8860a, #f0c040, #c8860a) !important;
+  background-size: 200% 200% !important;
+  -webkit-background-clip: text !important;
+  -webkit-text-fill-color: transparent !important;
+  background-clip: text !important;
+  animation: shimmer 4s ease-in-out infinite;
+  display: block !important;
+  padding-bottom: 4px !important;
+}
+
+/* subtitle line under realm name */
+#kc-header-wrapper::after {
+  content: '◈  Secure Passkey Authentication  ◈';
+  display: block;
+  font-family: 'Share Tech Mono', monospace;
+  font-size: 10px;
+  letter-spacing: 4px;
+  color: rgba(200,134,10,.45);
+  -webkit-text-fill-color: rgba(200,134,10,.45);
+  margin-top: 4px;
+  margin-bottom: 24px;
+}
+
+@keyframes shimmer {
+  0%, 100% { background-position: 0% 50%; }
+  50%       { background-position: 100% 50%; }
+}
+
+/* divider */
+#kc-header { border-bottom: 1px solid rgba(200,134,10,.25) !important; padding-bottom: 24px !important; margin-bottom: 28px !important; }
+
+/* ── Form labels ─────────────────────────────────────────────────────────── */
+label,
+.pf-c-form__label,
+.pf-v5-c-form__label,
+.control-label {
+  font-family: 'Share Tech Mono', monospace !important;
+  font-size: 11px !important;
+  color: rgba(200,134,10,.6) !important;
+  letter-spacing: 2px !important;
+  text-transform: uppercase !important;
+  margin-bottom: 6px !important;
+  display: block !important;
+}
+
+/* ── Inputs ──────────────────────────────────────────────────────────────── */
+input[type="text"],
+input[type="email"],
+input[type="password"],
+input.form-control,
+.pf-c-form-control,
+.pf-v5-c-form-control {
+  background: rgba(26,18,8,.8) !important;
+  border: 1px solid rgba(200,134,10,.4) !important;
+  border-radius: 3px !important;
+  color: #e8c870 !important;
+  font-family: 'Rajdhani', sans-serif !important;
+  font-size: 16px !important;
+  font-weight: 500 !important;
+  padding: 10px 14px !important;
+  width: 100% !important;
+  transition: border-color .2s, box-shadow .2s !important;
+  outline: none !important;
+}
+
+input[type="text"]:focus,
+input[type="email"]:focus,
+input[type="password"]:focus,
+input.form-control:focus {
+  border-color: #c8860a !important;
+  box-shadow: 0 0 12px rgba(200,134,10,.25) !important;
+  background: rgba(30,21,8,.95) !important;
+}
+
+input::placeholder { color: rgba(200,134,10,.3) !important; }
+
+/* ── Form groups ─────────────────────────────────────────────────────────── */
+.form-group,
+.pf-c-form__group,
+.pf-v5-c-form__group {
+  margin-bottom: 20px !important;
+}
+
+/* ── Primary button (Log In / Sign In / passkey button) ──────────────────── */
+input[type="submit"],
+.btn.btn-primary,
+button.btn-primary,
+.pf-c-button.pf-m-primary,
+.pf-v5-c-button.pf-m-primary,
+#kc-login,
+#kc-webauthn-authenticate-button,
+#authenticateWebAuthnButton {
+  background: linear-gradient(135deg, #2a1a04, #3d2608, #2a1a04) !important;
+  border: 1px solid #c8860a !important;
+  border-radius: 3px !important;
+  color: #e8a020 !important;
+  font-family: 'Cinzel', serif !important;
+  font-size: 13px !important;
+  font-weight: 700 !important;
+  letter-spacing: 3px !important;
+  padding: 14px 24px !important;
+  text-transform: uppercase !important;
+  width: 100% !important;
+  cursor: pointer !important;
+  transition: all .3s !important;
+  box-shadow: 0 0 20px rgba(200,134,10,.2), inset 0 0 20px rgba(0,0,0,.3) !important;
+}
+
+input[type="submit"]:hover,
+.btn.btn-primary:hover,
+button.btn-primary:hover,
+.pf-c-button.pf-m-primary:hover,
+#kc-login:hover,
+#kc-webauthn-authenticate-button:hover {
+  box-shadow: 0 0 40px rgba(200,134,10,.45), inset 0 0 20px rgba(200,134,10,.1) !important;
+  border-color: #e8a020 !important;
+  color: #f0c040 !important;
+}
+
+/* ── Secondary / link buttons ────────────────────────────────────────────── */
+.btn.btn-default,
+button.btn-default,
+.pf-c-button.pf-m-secondary,
+.pf-v5-c-button.pf-m-secondary {
+  background: transparent !important;
+  border: 1px solid rgba(200,134,10,.4) !important;
+  border-radius: 3px !important;
+  color: rgba(200,134,10,.7) !important;
+  font-family: 'Cinzel', serif !important;
+  font-size: 12px !important;
+  letter-spacing: 2px !important;
+  padding: 10px 24px !important;
+  text-transform: uppercase !important;
+  width: 100% !important;
+  margin-top: 10px !important;
+  cursor: pointer !important;
+  transition: all .3s !important;
+}
+
+.btn.btn-default:hover,
+.pf-c-button.pf-m-secondary:hover {
+  border-color: #c8860a !important;
+  color: #e8a020 !important;
+  box-shadow: 0 0 16px rgba(200,134,10,.2) !important;
+}
+
+/* ── Links ───────────────────────────────────────────────────────────────── */
+a, a:visited {
+  color: rgba(200,134,10,.65) !important;
+  text-decoration: none !important;
+  font-family: 'Share Tech Mono', monospace;
+  font-size: 12px;
+  letter-spacing: 1px;
+  transition: color .2s;
+}
+
+a:hover { color: #e8a020 !important; text-decoration: underline !important; }
+
+/* ── Error / alert messages ──────────────────────────────────────────────── */
+.alert, .alert-error, .pf-c-alert, .pf-v5-c-alert {
+  background: rgba(120,20,20,.3) !important;
+  border: 1px solid rgba(220,50,50,.4) !important;
+  border-radius: 3px !important;
+  color: #f87171 !important;
+  font-family: 'Share Tech Mono', monospace !important;
+  font-size: 12px !important;
+  padding: 12px 16px !important;
+  margin-bottom: 20px !important;
+  letter-spacing: 1px !important;
+}
+
+.alert-warning {
+  background: rgba(120,80,0,.3) !important;
+  border-color: rgba(200,134,10,.4) !important;
+  color: #e8c870 !important;
+}
+
+.alert-success {
+  background: rgba(0,80,40,.3) !important;
+  border-color: rgba(74,222,128,.35) !important;
+  color: #4ade80 !important;
+}
+
+/* ── "Sign in with passkey" / WebAuthn section ───────────────────────────── */
+#kc-webauthn-authenticate-button,
+div[id*="webauthn"],
+div[id*="passkey"] {
+  margin-bottom: 20px !important;
+}
+
+/* The passkey button is an <a>, which is inline by default: its vertical
+   padding doesn't push following content down (overlapped "Try Another Way")
+   and width:100% is ignored. Make it a real block button. */
+#authenticateWebAuthnButton {
+  display: block !important;
+  text-align: center !important;
+  text-decoration: none !important;
+  line-height: 1.2 !important;
+  margin-top: 12px !important;
+}
+#authenticateWebAuthnButton:hover {
+  box-shadow: 0 0 40px rgba(200,134,10,.45), inset 0 0 20px rgba(200,134,10,.1) !important;
+  border-color: #e8a020 !important;
+  color: #f0c040 !important;
+  text-decoration: none !important;
+}
+
+#try-another-way {
+  display: inline-block !important;
+  margin-top: 4px !important;
+}
+
+/* ── Register page: required "*" inline with label, centered header ─────── */
+.form-group label.pf-c-form__label,
+.form-group label.control-label { display: inline-block !important; }
+span.required {
+  color: #e8a020 !important;
+  margin-left: 4px !important;
+  font-size: 11px !important;
+}
+.login-pf-header > div:has(> .col-md-10 > #kc-page-title) {
+  display: flex !important;
+  flex-direction: column-reverse !important;
+  align-items: center !important;
+}
+.login-pf-header > div:has(> .col-md-10 > #kc-page-title) > [class*="col-"] {
+  width: 100% !important;
+  float: none !important;
+  text-align: center !important;
+}
+.login-pf-header > div:has(> .col-md-10 > #kc-page-title) .subtitle {
+  font-family: 'Share Tech Mono', monospace !important;
+  font-size: 10px !important;
+  color: rgba(200,134,10,.45) !important;
+  letter-spacing: 1px !important;
+}
+
+/* ── Password show/hide toggle ───────────────────────────────────────────── */
+.pf-c-input-group .pf-c-form-control,
+.pf-v5-c-input-group .pf-v5-c-form-control {
+  flex: 1 1 auto !important;
+  width: auto !important;
+  min-width: 0 !important;
+  border-top-right-radius: 0 !important;
+  border-bottom-right-radius: 0 !important;
+}
+.pf-c-input-group .pf-c-button.pf-m-control,
+.pf-v5-c-input-group .pf-v5-c-button.pf-m-control {
+  background: rgba(26,18,8,.8) !important;
+  border: 1px solid rgba(200,134,10,.4) !important;
+  border-left: none !important;
+  border-radius: 0 3px 3px 0 !important;
+  color: rgba(200,134,10,.7) !important;
+  width: 48px !important;
+  height: auto !important;
+  cursor: pointer !important;
+}
+.pf-c-input-group .pf-c-button.pf-m-control::after,
+.pf-v5-c-input-group .pf-v5-c-button.pf-m-control::after { border: none !important; }
+.pf-c-input-group .pf-c-button.pf-m-control:hover { color: #e8a020 !important; }
+
+/* Divider between passkey and password */
+#kc-form-login-alternative-divider,
+hr, .separator {
+  border: none !important;
+  border-top: 1px solid rgba(200,134,10,.2) !important;
+  margin: 24px 0 !important;
+  position: relative;
+}
+
+/* ── Checkbox (remember me) ──────────────────────────────────────────────── */
+input[type="checkbox"] { accent-color: #c8860a; }
+.checkbox label, .pf-c-check__label {
+  color: rgba(200,134,10,.6) !important;
+  font-family: 'Share Tech Mono', monospace !important;
+  font-size: 11px !important;
+  letter-spacing: 1px !important;
+}
+
+/* ── Social / identity provider buttons ──────────────────────────────────── */
+.zocial, .btn-social { border-radius: 3px !important; }
+
+/* ── Info / registration link area ──────────────────────────────────────── */
+#kc-info, #kc-registration, .login-pf-signup {
+  text-align: center !important;
+  margin-top: 20px !important;
+  padding-top: 16px !important;
+  border-top: 1px solid rgba(200,134,10,.15) !important;
+  font-family: 'Share Tech Mono', monospace !important;
+  font-size: 11px !important;
+  color: rgba(200,134,10,.45) !important;
+  letter-spacing: 1px !important;
+}
+
+/* ── Footer ──────────────────────────────────────────────────────────────── */
+#kc-info-message {
+  font-family: 'Share Tech Mono', monospace !important;
+  font-size: 11px !important;
+  color: rgba(200,134,10,.5) !important;
+  letter-spacing: 1px !important;
+  text-align: center !important;
+}
+
+
+/* Register page: space between "Back to Login" and the submit button */
+#kc-form-options + #kc-form-buttons,
+#kc-form-buttons { margin-top: 16px !important; }
+
+/* ── Passkey-first layout (see js/passkey-default.js) ────────────────────── */
+#ap-passkey-panel {
+  text-align: center;
+  margin-bottom: 8px;
+}
+#ap-passkey-panel .ap-qr-icon {
+  color: #e8a020;
+  filter: drop-shadow(0 0 10px rgba(200,134,10,.5));
+  margin-bottom: 10px;
+}
+#ap-passkey-panel .ap-passkey-text {
+  color: rgba(212,170,96,.8);
+  font-size: 15px;
+  line-height: 1.6;
+  margin: 0 0 18px;
+}
+#ap-passkey-panel #authenticateWebAuthnButton { margin-top: 0 !important; }
+#ap-use-password {
+  display: inline-block !important;
+  margin-top: 16px !important;
+}
+/* Collapsed state: hide the username/password form */
+body.ap-passkey-first #kc-form-login { display: none !important; }
+/* Expanded state: separate the password form from the passkey panel */
+body:not(.ap-passkey-first) #kc-form-login {
+  border-top: 1px solid rgba(200,134,10,.2);
+  padding-top: 20px;
+  margin-top: 16px;
+}
+
+/* "Sign in with QR code" link on Keycloak's sign-in page (desktop) */
+#ap-use-qr {
+  display: block !important;
+  text-align: center !important;
+  margin-top: 12px !important;
+  padding: 12px 24px !important;
+  border: 1px solid rgba(200,134,10,.4) !important;
+  border-radius: 3px !important;
+  font-family: 'Cinzel', serif !important;
+  font-size: 12px !important;
+  letter-spacing: 2px !important;
+  text-transform: uppercase !important;
+  text-decoration: none !important;
+}
+#ap-use-qr:hover { border-color: #c8860a !important; color: #e8a020 !important; text-decoration: none !important; }
+
+/* ── "Select login method" (Try Another Way) ─────────────────────────────── */
+.select-auth-container {
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 12px !important;
+  margin: 8px 0 4px !important;
+}
+button.select-auth-box-parent {
+  display: flex !important;
+  align-items: center !important;
+  gap: 16px !important;
+  width: 100% !important;
+  padding: 16px 18px !important;
+  margin: 0 !important;
+  background: rgba(26,18,8,.8) !important;
+  border: 1px solid rgba(200,134,10,.4) !important;
+  border-radius: 3px !important;
+  color: #d4aa60 !important;
+  text-align: left !important;
+  cursor: pointer !important;
+  font: inherit !important;
+  transition: border-color .2s, box-shadow .2s, background .2s !important;
+}
+button.select-auth-box-parent:hover,
+button.select-auth-box-parent:focus-visible {
+  border-color: #e8a020 !important;
+  background: rgba(40,27,10,.95) !important;
+  box-shadow: 0 0 20px rgba(200,134,10,.25) !important;
+  outline: none !important;
+}
+.select-auth-box-icon {
+  flex: 0 0 36px !important;
+  width: 36px !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  color: #e8a020 !important;
+  font-size: 22px !important;
+}
+.select-auth-box-icon i, .select-auth-box-icon-properties {
+  color: #e8a020 !important;
+  font-size: 22px !important;
+  margin: 0 !important;
+}
+button.select-auth-box-parent > .pf-l-stack {
+  display: flex !important;
+  flex-direction: column !important;
+  align-items: flex-start !important;
+  gap: 4px !important;
+  flex: 1 1 auto !important;
+  min-width: 0 !important;
+}
+.select-auth-box-headline {
+  font-family: 'Cinzel', serif !important;
+  font-size: 14px !important;
+  font-weight: 700 !important;
+  letter-spacing: 2px !important;
+  text-transform: uppercase !important;
+  color: #e8a020 !important;
+  text-align: left !important;
+  margin: 0 !important;
+  -webkit-text-fill-color: #e8a020 !important;
+  background: none !important;
+}
+.select-auth-box-desc {
+  font-family: 'Rajdhani', sans-serif !important;
+  font-size: 14px !important;
+  color: rgba(212,170,96,.75) !important;
+  text-align: left !important;
+  margin: 0 !important;
+}
+button.select-auth-box-parent > .pf-m-fill { display: none !important; }
+.select-auth-box-arrow {
+  flex: 0 0 auto !important;
+  color: rgba(200,134,10,.6) !important;
+  font-size: 20px !important;
+  margin-left: auto !important;
+}
+.select-auth-box-arrow i { color: inherit !important; }
+
+/* ── Consent screen: "Signing in as" card ─────────────────────────────────── */
+#ap-grant-user {
+  text-align: center;
+  margin: 0 0 24px;
+  padding: 16px;
+  border: 1px solid rgba(200,134,10,.35);
+  border-radius: 3px;
+  background: rgba(26,18,8,.6);
+}
+#ap-grant-user .ap-grant-label {
+  font-family: 'Share Tech Mono', monospace; font-size: 11px; letter-spacing: 2px;
+  text-transform: uppercase; color: rgba(200,134,10,.6); margin-bottom: 6px;
+}
+#ap-grant-user .ap-grant-name {
+  font-family: 'Cinzel', serif; font-size: 18px; font-weight: 700; color: #e8c870; letter-spacing: 1px;
+}
+#ap-grant-user .ap-grant-id {
+  display: flex; flex-wrap: wrap; justify-content: center; gap: 4px 14px;
+  font-size: 15px; color: #e8c870; margin-top: 4px; word-break: break-all;
+}
+#ap-grant-user .ap-grant-hint { font-size: 13px; color: rgba(212,170,96,.6); margin-top: 8px; }
