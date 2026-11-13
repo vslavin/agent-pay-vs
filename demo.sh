@@ -27,6 +27,8 @@ APP_DIR="$HOME/dev/agent-pay-vs/demo-app"
 LOG_DIR="$HOME/dev/keycloak-setup"
 APP_URL="$PUBLIC"
 PROXY_PY="$HOME/dev/agent-pay-vs/proxy.py"
+WALLET_DIR="$HOME/dev/agent-pay-vs/agent-wallet-demo/wallet-service"
+NODE=/opt/homebrew/bin/node
 
 ok()   { print -P "  %F{green}✔%f $*"; }
 warn() { print -P "  %F{yellow}!%f $*"; }
@@ -46,6 +48,7 @@ kc_has_domain()  { pgrep -f "kc.sh start-dev.*--hostname=$PUBLIC" >/dev/null; }
 app_running()    { lsof -tiTCP:3000 -sTCP:LISTEN >/dev/null 2>&1; }
 ngrok_running()  { pgrep -f "ngrok http 8000 --url=$PUBLIC" >/dev/null; }
 proxy_running()  { lsof -tiTCP:8000 -sTCP:LISTEN >/dev/null 2>&1; }
+wallet_running() { lsof -tiTCP:3100 -sTCP:LISTEN >/dev/null 2>&1; }
 
 stop_keycloak() {
   pkill -f 'kc.sh start-dev' 2>/dev/null
@@ -68,7 +71,8 @@ start() {
   else
     kc_running && { warn "running without the ngrok hostname — restarting"; stop_keycloak; }
     (cd "$KC_HOME" && nohup ./bin/kc.sh start-dev --http-port=8080 \
-        --hostname="$PUBLIC" --hostname-backchannel-dynamic=true \
+        --hostname="$PUBLIC" --hostname-admin=http://localhost:8080 \
+        --hostname-backchannel-dynamic=true \
         --proxy-headers=xforwarded > "$LOG_DIR/keycloak.log" 2>&1 &)
     print "  starting (takes ~20-40 s)…"
   fi
@@ -80,6 +84,18 @@ start() {
             --format csv --noquotes 2>/dev/null); then
     [[ "$rp" == "$DOMAIN" ]] && ok "passkey rpId = $DOMAIN" \
       || warn "passkey rpId is '$rp', expected '$DOMAIN' — passkeys won't match (fix: kcadm update realms/passkey-demo -s webAuthnPolicyPasswordlessRpId=$DOMAIN)"
+  fi
+
+  # Wallet service (OUSD treasury + user wallets on Tempo testnet). Optional: the
+  # app still runs without it; the admin page then says the service is unreachable.
+  print "Wallet service :3100"
+  if wallet_running; then
+    ok "already running"
+  elif [[ -x "$NODE" && -f "$WALLET_DIR/data/treasury.json" ]]; then
+    (cd "$WALLET_DIR" && nohup "$NODE" server.mjs > "$LOG_DIR/wallet-service.log" 2>&1 &)
+    wait_for "http://127.0.0.1:3100/" 10 "Wallet service" || tail -5 "$LOG_DIR/wallet-service.log" | sed 's/^/    /'
+  else
+    warn "skipped (needs node at $NODE and $WALLET_DIR/data/treasury.json)"
   fi
 
   # 2. Demo app (always restarted so it picks up the public URL)
@@ -118,6 +134,7 @@ stop() {
   pkill -x ngrok 2>/dev/null && ok "ngrok stopped (tunnel closed)" || ok "ngrok not running"
   if proxy_running; then lsof -tiTCP:8000 -sTCP:LISTEN | xargs kill 2>/dev/null; ok "proxy stopped"; else ok "proxy not running"; fi
   if app_running; then lsof -tiTCP:3000 -sTCP:LISTEN | xargs kill 2>/dev/null; ok "demo app stopped"; else ok "demo app not running"; fi
+  if wallet_running; then lsof -tiTCP:3100 -sTCP:LISTEN | xargs kill 2>/dev/null; ok "wallet service stopped"; else ok "wallet service not running"; fi
   if kc_running; then stop_keycloak; ok "Keycloak stopped"; else ok "Keycloak not running"; fi
 }
 
@@ -126,6 +143,7 @@ status() {
   ngrok_running && ok "ngrok → $PUBLIC" || fail "ngrok"
   app_running   && ok "Demo app http://localhost:3000" || fail "Demo app"
   proxy_running && ok "Proxy :8000" || fail "Proxy"
+  wallet_running && ok "Wallet service :3100" || warn "Wallet service not running"
 }
 
 case "${1:-start}" in

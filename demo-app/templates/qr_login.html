@@ -40,6 +40,23 @@
       <div class="qr-done" id="qr-done" hidden>✔</div>
     </div>
 
+    <div class="qr-confirm" id="qr-confirm" hidden role="status" aria-live="polite">
+      <div class="qr-radar" aria-hidden="true">
+        <span class="ring r1"></span><span class="ring r2"></span><span class="ring r3"></span>
+        <span class="qr-key">🔑</span>
+      </div>
+      <div class="qr-who-label">Accessing passkey on phone</div>
+      <div class="qr-who-name" id="qr-who-name"></div>
+      <div class="qr-who-user" id="qr-who-user"></div>
+      <div class="qr-who-msg">Please confirm your identity on your phone.</div>
+      <ol class="qr-who-steps">
+        <li>Unlock your phone if it asks.</li>
+        <li>Approve with your passkey.</li>
+        <li>Tap <b>Yes</b> to finish signing in.</li>
+      </ol>
+      <div class="qr-who-note">Not you? Decline on your phone, or <a href="/login">start over</a>.</div>
+    </div>
+
     <p class="desc qr-desc" id="qr-msg">
       Scan with your iPhone camera, then approve with your passkey in 1Password.
       This page signs you in automatically.
@@ -80,7 +97,35 @@
       '<a class="qr-fallback" href="' + url + '">Open sign-in link</a>';
   }
 
+  // Fast, cheap poll: has someone signed in on the phone yet, and who?
+  var whoDone = false, whoShown = false;
+  function who() {
+    if (whoDone || Date.now() > expires) return;
+    fetch("/login/who", { credentials: "same-origin", cache: "no-store" })
+      .then(function (r) { return r.json(); })
+      .then(function (s) {
+        if (s.who && !whoShown) {
+          whoShown = true;
+          document.getElementById("qr-who-name").textContent = s.who.name || s.who.username;
+          document.getElementById("qr-who-user").textContent =
+            s.who.name && s.who.username ? "@" + s.who.username : "";
+          document.getElementById("qr-frame").hidden = true;
+          document.getElementById("qr-msg").hidden = true;
+          document.getElementById("qr-confirm").hidden = false;
+          document.getElementById("qr-status-line").innerHTML =
+            '<span class="dot"></span>PHONE CONNECTED &nbsp;·&nbsp; AWAITING CONFIRMATION';
+        }
+      })
+      .catch(function () {})
+      .then(function () { if (!whoDone) setTimeout(who, 1000); });
+  }
+  setTimeout(who, 1000);
+
   function finish(text, ok) {
+    whoDone = true;
+    document.getElementById("qr-confirm").hidden = true;
+    document.getElementById("qr-frame").hidden = false;
+    document.getElementById("qr-msg").hidden = false;
     msg.textContent = text;
     document.getElementById("qr-frame").classList.add(ok ? "qr-ok" : "qr-dead");
     if (ok) document.getElementById("qr-done").hidden = false;

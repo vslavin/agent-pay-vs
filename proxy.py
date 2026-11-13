@@ -5,7 +5,7 @@ Agent Pay — tiny reverse proxy so the app AND Keycloak share one public
 
     ngrok https://<domain>  →  this proxy :8000
         /realms/*, /resources/*   →  Keycloak   localhost:8080
-        /admin*                   →  403 (admin console stays localhost-only)
+        /admin*, /internal*       →  403 (admin console / Keycloak→app hook stay local)
         everything else           →  demo app   localhost:3000
 
 The original Host header is passed through (plus X-Forwarded-*), so Keycloak
@@ -22,7 +22,7 @@ PORT     = int(os.environ.get("PROXY_PORT", "8000"))
 KEYCLOAK = ("127.0.0.1", 8080)
 APP      = ("127.0.0.1", 3000)
 KC_PREFIXES = ("/realms/", "/resources/")
-BLOCKED     = ("/admin",)
+BLOCKED     = ("/admin", "/internal")
 
 HOP_BY_HOP = {"connection", "keep-alive", "proxy-authenticate", "proxy-authorization",
               "te", "trailers", "transfer-encoding", "upgrade"}

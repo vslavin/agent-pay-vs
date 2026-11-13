@@ -216,3 +216,89 @@ body::after {
 .btn-row { display: flex; gap: 12px; }
 .btn-row .btn { flex: 1 1 0; padding-left: 12px; padding-right: 12px; font-size: 12px; letter-spacing: 2px; }
 @media (max-width: 520px) { .btn-row { flex-direction: column; } }
+
+/* ── Admin banner (shown at the top when the user has the "admin" role) ─── */
+.admin-banner {
+  margin: 0 0 20px; padding: 12px 16px; text-align: center;
+  background: linear-gradient(180deg, rgba(232,160,32,.25), rgba(200,134,10,.12));
+  border: 1px solid var(--gold); border-radius: 3px;
+  color: #f0c040; font-family: 'Cinzel', serif; font-size: 15px; font-weight: 900; letter-spacing: .12em;
+  box-shadow: 0 0 24px rgba(232,160,32,.25);
+}
+.admin-banner span {
+  display: block; margin-top: 4px; color: var(--gold);
+  font-family: 'Rajdhani', sans-serif; font-size: 13px; font-weight: 500; letter-spacing: .08em;
+}
+
+/* ── Admin: treasury + wallets ─────────────────────────────────────────── */
+.panel-wide { max-width: 820px; }
+.admin-link {
+  display: inline-block; margin-top: 10px; padding: 6px 14px;
+  border: 1px solid var(--gold); border-radius: 3px; text-decoration: none;
+  color: #f0c040; font-family: 'Share Tech Mono', monospace; font-size: 12px; letter-spacing: 1px;
+}
+.admin-link:hover { background: rgba(232,160,32,.18); }
+.info-val.big  { font-family: 'Cinzel', serif; font-size: 22px; color: #f0c040; }
+.mono, .info-val.mono { font-family: 'Share Tech Mono', monospace; font-size: 13px; }
+.panel a { color: #e8c870; text-decoration: none; border-bottom: 1px dotted rgba(200,134,10,.5); }
+.panel a.btn, .panel a.admin-link { border-bottom: 1px solid var(--brass); }
+.tbl { width: 100%; border-collapse: collapse; font-size: 15px; }
+.tbl th {
+  text-align: left; padding: 8px 10px; border-bottom: 1px solid rgba(200,134,10,.35);
+  font-family: 'Share Tech Mono', monospace; font-size: 11px; font-weight: 400;
+  color: rgba(200,134,10,.55); letter-spacing: 2px; text-transform: uppercase;
+}
+.tbl td { padding: 10px; border-bottom: 1px solid rgba(200,134,10,.12); color: #e8c870; }
+.tbl .num { text-align: right; font-family: 'Share Tech Mono', monospace; }
+.tbl .empty { text-align: center; color: rgba(212,170,96,.6); padding: 24px 10px; }
+.st-ok   { color: #4ade80; }
+.st-wait { color: #e8c870; }
+.st-err  { color: #f87171; }
+@media (max-width: 600px) { .panel-wide { padding: 36px 20px; } .tbl { font-size: 13px; } }
+
+/* ── Admin: send form ──────────────────────────────────────────────────── */
+.send-form { display: flex; flex-direction: column; gap: 8px; }
+.send-form .info-label { margin-top: 6px; }
+.field {
+  width: 100%; padding: 12px 14px; background: #0b0905; color: #e8c870;
+  border: 1px solid rgba(200,134,10,.5); border-radius: 3px;
+  font-family: 'Share Tech Mono', monospace; font-size: 15px;
+}
+.field:focus { outline: none; border-color: var(--gold); box-shadow: 0 0 18px rgba(232,160,32,.25); }
+.field:disabled { opacity: .5; }
+select.field option { background: #0b0905; color: #e8c870; }
+.send-form .btn { margin-top: 14px; cursor: pointer; }
+.send-form .btn:disabled { opacity: .5; cursor: default; }
+.tbl .memo { color: #d4aa60; font-style: italic; max-width: 200px; overflow-wrap: anywhere; }
+
+/* ── Agents ────────────────────────────────────────────────────────────── */
+textarea.field { resize: vertical; min-height: 84px; line-height: 1.4; }
+.tbl .agent-desc { white-space: pre-wrap; overflow-wrap: anywhere; color: #d4aa60; max-width: 320px; }
+
+/* ── QR page: "who is confirming on the phone" ─────────────────────────── */
+.qr-confirm { text-align: center; margin: 8px 0 20px; }
+.qr-confirm[hidden] { display: none; }
+.qr-radar { position: relative; width: 150px; height: 150px; margin: 0 auto 14px; }
+.qr-radar .ring {
+  position: absolute; inset: 0; border: 2px solid var(--gold); border-radius: 50%;
+  opacity: 0; animation: qrPulse 2.4s ease-out infinite;
+}
+.qr-radar .r2 { animation-delay: .8s; }
+.qr-radar .r3 { animation-delay: 1.6s; }
+.qr-key {
+  position: absolute; inset: 35px; display: flex; align-items: center; justify-content: center;
+  font-size: 34px; border-radius: 50%; background: rgba(232,160,32,.15); border: 1px solid var(--brass);
+  box-shadow: 0 0 22px rgba(232,160,32,.45); animation: qrBeat 1.6s ease-in-out infinite;
+}
+@keyframes qrPulse { 0% { transform: scale(.35); opacity: .9; } 100% { transform: scale(1.05); opacity: 0; } }
+@keyframes qrBeat  { 0%,100% { transform: scale(1); } 50% { transform: scale(1.1); } }
+.qr-who-label { font-size: 13px; letter-spacing: .14em; text-transform: uppercase; color: var(--brass); }
+.qr-who-name  { font-family: 'Cinzel', serif; font-size: 26px; font-weight: 900; color: #f0c040; margin: 4px 0 2px; }
+.qr-who-user  { font-family: 'Share Tech Mono', monospace; font-size: 14px; color: var(--gold); min-height: 1em; }
+.qr-who-msg   { margin: 16px 0 8px; font-size: 18px; font-weight: 600; color: #f4e4bc; }
+.qr-who-steps { display: inline-block; text-align: left; margin: 0 0 12px; padding-left: 20px; color: #d8c9a0; font-size: 15px; }
+.qr-who-note  { font-size: 13px; color: #a89868; }
+.qr-who-note a { color: var(--gold); }
+@media (prefers-reduced-motion: reduce) { .qr-radar .ring, .qr-key { animation: none; opacity: .6; } }
+.hint { font-size: 14px; color: #e8c870; margin: -2px 0 2px; }
+.hint.dim { color: rgba(212,170,96,.6); font-size: 13px; margin-top: 0; }

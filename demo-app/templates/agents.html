@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Agent Pay — My Agents</title>
+  <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@700;900&family=Rajdhani:wght@300;500;600&family=Share+Tech+Mono&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+
+<div class="gear-bg">
+  <span class="g1">⚙</span><span class="g2">⚙</span>
+  <span class="g3">⚙</span><span class="g4">⚙</span><span class="g5">⚙</span>
+</div>
+
+<div class="stage">
+  <div class="panel panel-wide">
+    <div class="rivets">
+      <span class="tl">◉</span><span class="tr">◉</span>
+      <span class="bl">◉</span><span class="br">◉</span>
+    </div>
+
+    <div class="top-bar">
+      <span class="gear-spin">⚙</span>
+      <div>
+        <div class="badge">Autonomous Payment System</div>
+        <div class="status"><span class="dot"></span>SESSION ACTIVE</div>
+      </div>
+    </div>
+
+    <div class="title">MY AGENTS</div>
+    <div class="subtitle">◈ &nbsp; Create and manage your agents &nbsp; ◈</div>
+
+    <!-- AGENTS_BODY -->
+
+    <a class="btn btn-secondary" href="/" style="margin-top:28px">Back</a>
+
+    <div class="footer">AGENT PAY &nbsp;·&nbsp; DEMO</div>
+  </div>
+</div>
+
+<script>
+(function () {
+  var f = document.getElementById('agentform');
+  if (!f) return;
+  f.addEventListener('submit', function () { f.querySelector('button').disabled = true; });
+  var n = document.getElementById('name'), out = document.getElementById('fullname');
+  if (n && out) {
+    var show = function () { out.textContent = out.dataset.prefix + n.value.trim().toLowerCase(); };
+    n.addEventListener('input', show);
+    show();
+  }
+}());
+</script>
+</body>
+</html>
