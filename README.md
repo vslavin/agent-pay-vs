@@ -4,6 +4,8 @@ A small demo of passwordless sign-in with **Keycloak** and **passkeys**. A user 
 
 On top of sign-in sits an early **agent payments** layer. Every user gets a wallet holding test **OUSD** on Tempo's testnet, an admin can send OUSD from a treasury wallet, and users can create agents. It uses test tokens only; nothing here moves real money.
 
+I wrote up what this is and what I learned building it: [I let an AI agent buy sneakers without me. Here is how I made sure it could not buy anything else.](https://medium.com/@vslavin/i-let-an-ai-agent-buy-sneakers-without-me-here-is-how-i-made-sure-it-could-not-buy-anything-else-498e89f2e6ef)
+
 The demo covers:
 
 - **QR / device sign-in** using the OAuth 2.0 Device Authorization Grant.
