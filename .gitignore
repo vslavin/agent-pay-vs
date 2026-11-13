@@ -8,3 +8,13 @@ build/
 dist/
 .DS_Store
 *.log
+
+# Visa sandbox credentials: never commit
+credentials/
+*.pem
+*.p12
+*.pfx
+*.key
+*.crt
+*.cer
+*.csr

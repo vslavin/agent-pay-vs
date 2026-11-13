@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Agent Pay — Agent</title>
+  <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@700;900&family=Rajdhani:wght@300;500;600&family=Share+Tech+Mono&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+
+<div class="gear-bg">
+  <span class="g1">⚙</span><span class="g2">⚙</span>
+  <span class="g3">⚙</span><span class="g4">⚙</span><span class="g5">⚙</span>
+</div>
+
+<div class="stage">
+  <div class="panel panel-wide">
+    <div class="rivets">
+      <span class="tl">◉</span><span class="tr">◉</span>
+      <span class="bl">◉</span><span class="br">◉</span>
+    </div>
+
+    <div class="top-bar">
+      <span class="gear-spin">⚙</span>
+      <div>
+        <div class="badge">Autonomous Payment System</div>
+        <div class="status"><span class="dot"></span>SESSION ACTIVE</div>
+      </div>
+    </div>
+
+    <div class="title"><!-- TITLE --></div>
+    <div class="subtitle">◈ &nbsp; <!-- SUBTITLE --> &nbsp; ◈</div>
+
+    <!-- AGENT_BODY -->
+
+    <a class="btn btn-secondary" href="<!-- BACK_HREF -->" style="margin-top:28px"><!-- BACK_TEXT --></a>
+
+    <div class="footer">AGENT PAY &nbsp;·&nbsp; MANDATES ARE SIGNED PERMISSIONS, NOT PAYMENTS</div>
+  </div>
+</div>
+
+<script>
+document.querySelectorAll('form[data-confirm]').forEach(function (form) {
+  form.addEventListener('submit', function (e) {
+    if (!confirm(form.dataset.confirm)) { e.preventDefault(); return; }
+    form.querySelector('button').disabled = true;
+  });
+});
+</script>
+</body>
+</html>

@@ -1,0 +1,81 @@
+[
+  {
+    "name": "account_type",
+    "displayName": "Account type",
+    "validations": {
+      "options": {
+        "options": [
+          "user",
+          "merchant"
+        ]
+      }
+    },
+    "annotations": {
+      "inputType": "select",
+      "inputOptionLabels": {
+        "user": "User",
+        "merchant": "Merchant"
+      }
+    },
+    "required": {
+      "roles": [
+        "user"
+      ]
+    },
+    "permissions": {
+      "view": [
+        "admin",
+        "user"
+      ],
+      "edit": [
+        "admin",
+        "user"
+      ]
+    },
+    "multivalued": false
+  },
+  {
+    "name": "business_name",
+    "displayName": "Business name (merchants only)",
+    "validations": {
+      "length": {
+        "max": 100
+      }
+    },
+    "permissions": {
+      "view": [
+        "admin",
+        "user"
+      ],
+      "edit": [
+        "admin",
+        "user"
+      ]
+    },
+    "multivalued": false
+  },
+  {
+    "name": "business_description",
+    "displayName": "Business description (merchants only, optional)",
+    "validations": {
+      "length": {
+        "max": 200
+      }
+    },
+    "annotations": {
+      "inputType": "textarea",
+      "inputTypeRows": "3"
+    },
+    "permissions": {
+      "view": [
+        "admin",
+        "user"
+      ],
+      "edit": [
+        "admin",
+        "user"
+      ]
+    },
+    "multivalued": false
+  }
+]

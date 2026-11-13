@@ -302,3 +302,40 @@ textarea.field { resize: vertical; min-height: 84px; line-height: 1.4; }
 @media (prefers-reduced-motion: reduce) { .qr-radar .ring, .qr-key { animation: none; opacity: .6; } }
 .hint { font-size: 14px; color: #e8c870; margin: -2px 0 2px; }
 .hint.dim { color: rgba(212,170,96,.6); font-size: 13px; margin-top: 0; }
+
+/* ── Admin: merchant registration ──────────────────────────────────────── */
+.inline-form { display: inline; }
+.btn-mini {
+  padding: 6px 10px; background: linear-gradient(135deg, #2a1a04, #3d2608);
+  border: 1px solid var(--brass); border-radius: 3px; color: var(--gold); cursor: pointer;
+  font-family: 'Cinzel', serif; font-size: 11px; font-weight: 700; letter-spacing: .08em; white-space: nowrap;
+}
+.btn-mini:hover { border-color: var(--gold); color: #f0c040; box-shadow: 0 0 14px rgba(200,134,10,.3); }
+.btn-mini:disabled { opacity: .5; cursor: default; }
+.dim { color: rgba(212,170,96,.6); }
+.small { font-size: 12px; margin-top: 2px; }
+
+/* ── Visa record page ──────────────────────────────────────────────────── */
+.small a { font-family: 'Share Tech Mono', monospace; font-size: 11px; }
+details.raw { margin-top: 22px; }
+details.raw summary { cursor: pointer; color: var(--gold); font-family: 'Share Tech Mono', monospace; font-size: 12px; letter-spacing: 1px; }
+details.raw pre {
+  margin-top: 10px; padding: 14px; max-height: 340px; overflow: auto; background: rgba(0,0,0,.45);
+  border: 1px solid rgba(200,134,10,.3); border-radius: 3px; color: #e8c870; font-size: 12px; line-height: 1.5; white-space: pre-wrap; word-break: break-all;
+}
+
+/* ── Main screen: wallet balance row with a compact action button ── */
+.wallet-row { gap: 14px; margin-bottom: 22px; border-bottom: none; }
+.wallet-row .info-label { flex: 0 0 auto; }
+.wallet-row .info-val { flex: 1 1 auto; text-align: right; }
+.btn.btn-small { display: inline-block; width: auto; flex: 0 0 auto; padding: 10px 16px; font-size: 12px; margin: 0; }
+
+/* ── Mandates form ─────────────────────────────────────────────────────── */
+.checks { display: flex; flex-direction: column; gap: 8px; margin-bottom: 4px; }
+.check { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border: 1px solid rgba(200,134,10,.35); border-radius: 3px; background: #0b0905; color: #e8c870; cursor: pointer; }
+.check input { accent-color: var(--gold); width: 16px; height: 16px; }
+
+/* ── Direct an agent: step log ─────────────────────────────────────────── */
+.steps { margin: 6px 0 0 20px; color: #e8c870; line-height: 1.55; }
+.steps li { margin-bottom: 8px; }
+.checks input[type=radio] { accent-color: var(--gold); width: 16px; height: 16px; }

@@ -19,6 +19,8 @@ Routes:
                           via kc_action=UPDATE_PASSWORD, then back to /
   GET /callback  → exchange code, store session, redirect to /
   GET/POST /agents → (role "user") create agents (name + description), list your own
+  GET /keys[?keyID=<kid>] → public registry of agent public keys, in the shape of Visa's TAP key
+                           retrieval (/tap/keys and /tap/keys/<kid> are aliases)
   GET /wallet    → (signed in) own OUSD wallet: balance + on-chain transaction history
   GET /treasury  → (role "admin") OUSD treasury balance + every user's wallet balance
   GET /logout    → Keycloak RP-initiated logout
@@ -43,6 +45,8 @@ import urllib.request
 from datetime import datetime, timezone
 from decimal import Decimal
 from http.cookies import SimpleCookie
+
+import shop
 
 # ── Config ────────────────────────────────────────────────────────────────────
 PORT = 3000
@@ -198,9 +202,28 @@ def _wallet_call(method, path, payload=None, timeout=15):
     with urllib.request.urlopen(req, timeout=timeout) as r:
         return json.loads(r.read())
 
-def _role_label(roles):
-    found = [r for r in ("admin", "merchant") if r in (roles or [])]
-    return ", ".join(found) or "user"
+def _wallet_summary(claims):
+    """Balance row + 'My wallet' button for the main screen. Never raises: if the wallet
+    service is down or the wallet is still being created, the row says so."""
+    try:
+        w = _wallet_call("GET", "/wallets/" + urllib.parse.quote(claims.get("sub", ""), safe=""), timeout=4)
+        bal = f'{_usd(w.get("balance"))} {html.escape(w.get("symbol", "OUSD"))}'
+        cls = "info-val big"
+    except urllib.error.HTTPError as e:
+        bal, cls = ("Being set up…" if e.code == 404 else "Unavailable"), "info-val"
+    except Exception:
+        bal, cls = "Unavailable", "info-val"
+    return ('<div class="divider">WALLET</div>'
+            '<div class="info-row wallet-row"><span class="info-label">Balance</span>'
+            f'<span class="{cls}">{bal}</span>'
+            '<a class="btn btn-small" href="/wallet">View details</a></div>')
+
+def _role_label(roles, account_type=None):
+    """'admin' (the Keycloak realm role, the only one Keycloak enforces); everyone else is a
+    'merchant' or a 'user' according to the Account type chosen at sign-up."""
+    if "admin" in (roles or []):
+        return "admin"
+    return "merchant" if account_type == "merchant" else "user"
 
 def _provision_wallet(claims):
     """Create the user's wallet (and queue the $100 gift) on sign-in, and refresh
@@ -209,7 +232,9 @@ def _provision_wallet(claims):
     if not sub:
         return
     payload = {"sub": sub, "username": username, "name": claims.get("name", ""),
-               "role": _role_label(claims.get("roles"))}
+               "role": _role_label(claims.get("roles"), claims.get("account_type")),
+               "businessName": claims.get("business_name", ""),
+               "businessDescription": claims.get("business_description", "")}
     def run():
         try:
             _wallet_call("POST", "/wallets", payload)
@@ -227,6 +252,13 @@ def _person(w):
 def _ousd(value):
     try:
         return f"{Decimal(value):,.4f}"
+    except Exception:
+        return "—"
+
+def _usd(value):
+    """'$1,234.50' — dollars and cents, used for balances."""
+    try:
+        return f"${Decimal(value):,.2f}"
     except Exception:
         return "—"
 
@@ -275,7 +307,7 @@ def _wallet_html(w):
         f"{notice}"
         '<div class="divider">BALANCE</div>'
         '<div class="info-row"><span class="info-label">Available</span>'
-        f'<span class="info-val big">{_ousd(w.get("balance"))} {html.escape(w.get("symbol", "OUSD"))}</span></div>'
+        f'<span class="info-val big">{_usd(w.get("balance"))} {html.escape(w.get("symbol", "OUSD"))}</span></div>'
         '<div class="info-row"><span class="info-label">Wallet</span>'
         f'<span class="info-val mono">{_explorer_link("address", addr, html.escape(addr[:10]) + "…" + html.escape(addr[-8:]))}</span></div>'
         '<div class="info-row"><span class="info-label">Test token</span>'
@@ -298,8 +330,8 @@ def _agent_fullname(claims, slug):
     return f"{owner}.{slug}"
 
 def _is_user(claims):
-    """True for the plain 'user' role (not admin, not merchant)."""
-    return _role_label(claims.get("roles")) == "user"
+    """True for account type 'user' (not an admin, not a merchant)."""
+    return _role_label(claims.get("roles"), claims.get("account_type")) == "user"
 
 def _agents_read():
     try:
@@ -312,6 +344,52 @@ def _agents_write(agents):
     tmp = AGENTS_FILE.with_suffix(".tmp")
     tmp.write_text(json.dumps(agents, indent=2))
     os.replace(tmp, AGENTS_FILE)
+
+def _agents_all():
+    with _agents_lock:
+        everyone = _agents_read()
+    return sorted(everyone, key=lambda a: a.get("created", 0), reverse=True)
+
+def _all_agents_html(agents, registry_kids, registry_ok):
+    """Admin page body: every agent from every owner, checked against the public key registry."""
+    e = html.escape
+    owners = {a.get("owner_sub") for a in agents}
+    summary = (
+        '<div class="divider">OVERVIEW</div>'
+        f'<div class="info-row"><span class="info-label">Agents</span><span class="info-val">{len(agents)}</span></div>'
+        f'<div class="info-row" style="margin-bottom:16px"><span class="info-label">Owners</span>'
+        f'<span class="info-val">{len(owners)}</span></div>')
+    notice = ("" if registry_ok else
+              '<div class="flash flash-err" role="status">The key registry is unreachable, so registry '
+              "checks are not shown.</div>")
+    rows = []
+    for a in agents:
+        kid = a.get("keyid") or ""
+        if not kid:
+            reg = '<span class="st-wait">no identity yet</span>'
+        elif not registry_ok:
+            reg = "—"
+        elif kid in registry_kids:
+            reg = '<span class="st-ok">✔ in registry</span>'
+        else:
+            reg = '<span class="st-err">missing</span>'
+        key = (f'<a href="/keys?keyID={urllib.parse.quote(kid, safe="")}" target="_blank" rel="noopener">{e(kid[:10])}…</a>'
+               if kid else "—")
+        rows.append(
+            "<tr>"
+            f'<td class="mono"><a href="/treasury/agents/{e(a.get("id", ""), quote=True)}">{e(a.get("name", "—"))}</a><div class="dim small">{e(a.get("id", ""))}</div></td>'
+            f'<td>{e(a.get("owner_username") or "—")}</td>'
+            f'<td class="agent-desc">{e(a.get("description") or "")}</td>'
+            f'<td class="mono">{key}<div class="small">{reg}</div></td>'
+            f'<td>{e(_when(a.get("created")))}</td></tr>')
+    if not rows:
+        rows.append('<tr><td colspan="5" class="empty">No agents yet. Users with the “user” account type '
+                    "create them from My agents.</td></tr>")
+    return (f"{notice}{summary}"
+            '<div class="divider">AGENTS</div>'
+            '<table class="tbl"><thead><tr><th>Agent</th><th>Owner</th><th>Description</th>'
+            '<th>TAP key</th><th>Created</th></tr></thead>'
+            f'<tbody>{"".join(rows)}</tbody></table>')
 
 def _agents_of(sub):
     with _agents_lock:
@@ -328,20 +406,492 @@ def _agent_create(claims, slug, description):
             return None, f"You can have at most {MAX_AGENTS_PER_USER} agents."
         if any(a["name"].casefold() == full.casefold() for a in agents):
             return None, f"An agent named “{full}” already exists."
-        agent = {"id": "agt_" + secrets.token_hex(6), "owner_sub": claims["sub"],
+        agent_id = "agt_" + secrets.token_hex(6)
+        try:
+            ident = _wallet_call("POST", "/agents/identity", {"agentId": agent_id, "name": full}, timeout=10)
+        except Exception:
+            return None, "Could not create the agent’s identity right now. Please try again in a moment."
+        agent = {"id": agent_id, "owner_sub": claims["sub"],
                  "owner_username": claims.get("preferred_username", ""),
-                 "slug": slug, "name": full, "description": description, "created": int(time.time())}
+                 "slug": slug, "name": full, "keyid": ident["kid"],
+                 "description": description, "created": int(time.time())}
         agents.append(agent)
         _agents_write(agents)
     return agent, None
 
+def _agents_backfill(agents):
+    """Give agents created before identities existed a TAP identity (idempotent)."""
+    missing = [a for a in agents if not a.get("keyid")]
+    if not missing:
+        return agents
+    with _agents_lock:
+        stored = {a["id"]: a for a in _agents_read()}
+        changed = False
+        for a in missing:
+            try:
+                ident = _wallet_call("POST", "/agents/identity", {"agentId": a["id"], "name": a["name"]}, timeout=10)
+            except Exception:
+                continue
+            a["keyid"] = ident["kid"]
+            if a["id"] in stored:
+                stored[a["id"]]["keyid"] = ident["kid"]
+                changed = True
+        if changed:
+            _agents_write(list(stored.values()))
+    return agents
+
+# ── Mandates: grant an agent authority (owner only; a fresh passkey sign-in signs it) ──
+_pending_mandates = {}   # token -> {sub, agent_id, params, created}
+MANDATE_HOURS = {1: "1 hour", 24: "24 hours", 168: "7 days", 720: "30 days"}
+AMOUNT_RE = re.compile(r"[0-9]+(\.[0-9]{1,6})?")
+
+def _agent_owned(sub, agent_id):
+    return next((a for a in _agents_all() if a.get("id") == agent_id and a.get("owner_sub") == sub), None)
+
+def _finish_mandate_stepup(claims, token, id_token):
+    """Runs after the owner signed in again. Returns ((kind, text), page to show)."""
+    p = _pending_mandates.pop(token, None)
+    if not p or p["sub"] != claims.get("sub") or time.time() - p["created"] > 300:
+        return ("err", "That approval expired or belongs to another account, so nothing was signed. Please try again."), "/agents"
+    auth_time = _decode_jwt(id_token).get("auth_time")
+    fresh = isinstance(auth_time, (int, float)) and time.time() - auth_time <= 120
+    if p.get("kind") == "approval":
+        back = f"/approvals/{p['approval_id']}"
+        if not fresh:
+            return ("err", "We couldn’t confirm that you signed in again just now, so the purchase was not approved."), back
+        try:
+            _wallet_call("POST", f"/approvals/{p['approval_id']}/approve", {"sub": claims["sub"], "authTime": int(auth_time)}, timeout=15)
+            return ("ok", "Approved. The agent can now repeat its checkout and the store will quote this exact purchase."), back
+        except urllib.error.HTTPError as e:
+            try:
+                msg = json.loads(e.read()).get("error") or f"error {e.code}"
+            except Exception:
+                msg = f"error {e.code}"
+            return ("err", f"Not approved: {msg}"), back
+        except Exception as e:
+            return ("err", f"Wallet service unreachable: {e}"), back
+    back = f"/agents/{p['agent_id']}"
+    if not fresh:
+        return ("err", "We couldn’t confirm that you signed in again just now, so no mandate was created."), back
+    if not _agent_owned(claims["sub"], p["agent_id"]):
+        return ("err", "That agent isn’t yours."), "/agents"
+    try:
+        out = _wallet_call("POST", "/mandates", {"sub": claims["sub"], "agentId": p["agent_id"], **p["params"]}, timeout=15)
+        return ("ok", f"Mandate {out['id']} granted. Your agent can now buy within those limits."), back
+    except urllib.error.HTTPError as e:
+        try:
+            msg = json.loads(e.read()).get("error") or f"error {e.code}"
+        except Exception:
+            msg = f"error {e.code}"
+        return ("err", f"The mandate was not created: {msg}"), back
+    except Exception as e:
+        return ("err", f"Wallet service unreachable: {e}"), back
+
+def _iso_to_epoch(text):
+    try:
+        return datetime.fromisoformat(str(text).replace("Z", "+00:00")).timestamp()
+    except Exception:
+        return None
+
+def _agent_detail_html(agent, mandates, merchants, csrf, flash="", approvals=(), readonly=False, orders=()):
+    e = html.escape
+    pend = [] if readonly else [a for a in approvals if a["status"] == "pending"]
+    approvals_html = ('<div class="divider" style="margin-top:28px">WAITING FOR YOUR APPROVAL</div>' + ''.join(
+        f'<a class="btn" style="margin-bottom:8px" href="/approvals/{e(a["id"], quote=True)}">Review: {e(a.get("item") or a["sku"])} at {e(a["businessName"])} for {e(_ousd(a["amount"]))} OUSD</a>' for a in pend)) if pend else ""
+    kid = agent.get("keyid") or ""
+    key = (f'<a href="/keys?keyID={urllib.parse.quote(kid, safe="")}" target="_blank" rel="noopener">{e(kid[:14])}…</a>'
+           if kid else "—")
+    def row(label, value, mono=False):
+        return (f'<div class="info-row"><span class="info-label">{e(label)}</span>'
+                f'<span class="info-val{" mono" if mono else ""}">{value}</span></div>')
+    stores = "".join(
+        f'<label class="check"><input type="checkbox" name="merchants" value="{e(m["username"], quote=True)}"> '
+        f'{e(m["businessName"])} <span class="dim">({e(m["username"])})</span></label>' for m in merchants
+    ) or '<div class="dim">No stores exist yet.</div>'
+    hours = "".join(f'<option value="{h}"{" selected" if h == 24 else ""}>{e(t)}</option>' for h, t in MANDATE_HOURS.items())
+    form = (
+        '<form class="send-form" method="post" action="/agents/' + e(agent["id"], quote=True) + '/mandates"'
+        ' data-confirm="You will be asked to sign in again with your passkey to approve this mandate. Continue?">'
+        f'<input type="hidden" name="csrf" value="{e(csrf, quote=True)}">'
+        f'<label class="info-label">Stores this agent may buy from</label><div class="checks">{stores}</div>'
+        '<label class="info-label" for="maxPerPurchase">Limit per purchase (OUSD)</label>'
+        '<input class="field" id="maxPerPurchase" name="maxPerPurchase" inputmode="decimal" autocomplete="off" placeholder="150" required pattern="[0-9]+(\\.[0-9]{1,6})?">'
+        '<label class="info-label" for="budget">Total budget (OUSD)</label>'
+        '<input class="field" id="budget" name="budget" inputmode="decimal" autocomplete="off" placeholder="300" required pattern="[0-9]+(\\.[0-9]{1,6})?">'
+        f'<label class="info-label" for="hours">Valid for</label><select class="field" id="hours" name="hours">{hours}</select>'
+        '<button class="btn" type="submit">Approve with passkey</button></form>')
+    rows = []
+    for m in mandates:
+        cls = {"active": "st-ok", "expired": "st-wait", "revoked": "st-err"}.get(m["status"], "")
+        exp = _iso_to_epoch(m.get("expiresAt"))
+        revoke = (f'<form class="inline-form" method="post" action="/agents/{e(agent["id"], quote=True)}/mandates/{e(m["id"], quote=True)}/revoke" '
+                  f'data-confirm="Revoke this mandate? The agent will not be able to buy with it any more.">'
+                  f'<input type="hidden" name="csrf" value="{e(csrf, quote=True)}"><button class="btn-mini" type="submit">Revoke</button></form>'
+                  if m["status"] == "active" and not readonly else "")
+        rows.append(
+            "<tr>"
+            f'<td class="mono">{e(m["id"])}<div class="small {cls}">{e(m["status"])}</div></td>'
+            f'<td>{e(", ".join(m.get("merchants", [])))}</td>'
+            f'<td>{e(_ousd(m["maxPerPurchase"]))}<div class="dim small">per purchase · {e(_ousd(m["budget"]))} total</div></td>'
+            f'<td>{e(_ousd(m["spent"]))}<div class="dim small">{e(_ousd(m["remaining"]))} left</div></td>'
+            f'<td>{e(_when(exp)) if exp else "—"}</td>{"" if readonly else f"<td>{revoke}</td>"}</tr>')
+    ord_rows = "".join(
+        f'<tr><td>{e(o.get("item") or o["sku"])}<div class="dim small">{e(o["businessName"])} · {e(o["id"])}</div></td>'
+        f'<td>{e(_ousd(o["amount"]))}</td>'
+        f'<td><span class="{ {"paid": "st-ok", "payment_required": "st-wait", "paying": "st-wait"}.get(o["status"], "st-err") }">{e(o["status"].replace("_", " "))}</span>'
+        f'{"<div class=small>signed receipts ✔</div>" if (o.get("receipts") or {}).get("payment") else ""}</td>'
+        f'<td class="mono">{_explorer_link("tx", o["txHash"], e(o["txHash"][:10]) + "…") if o.get("txHash") else "—"}</td>'
+        f'<td>{e(_when(_iso_to_epoch(o["createdAt"])))}</td></tr>' for o in orders)
+    purchases_html = ('<div class="divider" style="margin-top:28px">PURCHASES</div>'
+                      '<table class="tbl"><thead><tr><th>Item</th><th>OUSD</th><th>Status</th><th>Transaction</th><th>Quoted</th></tr></thead>'
+                      f'<tbody>{ord_rows or "<tr><td colspan=5 class=empty>No purchases yet.</td></tr>"}</tbody></table>')
+    cols = 5 if readonly else 6
+    empty = "No mandates yet. This agent cannot buy anything." if readonly else "No mandates yet. This agent cannot buy anything until you grant one."
+    table = ('<table class="tbl"><thead><tr><th>Mandate</th><th>Stores</th><th>Limits (OUSD)</th><th>Used</th><th>Expires</th>' + ("" if readonly else "<th></th>") + '</tr></thead>'
+             f'<tbody>{"".join(rows) or f"<tr><td colspan={cols} class=empty>{empty}</td></tr>"}</tbody></table>')
+    if readonly:
+        ap_rows = "".join(
+            f'<tr><td class="mono">{e(a["id"])}</td><td>{e(a["businessName"])}</td><td>{e(a.get("item") or a["sku"])}</td>'
+            f'<td>{e(_ousd(a["amount"]))}</td><td>{e(a["status"])}</td></tr>' for a in approvals)
+        approvals_html = ('<div class="divider" style="margin-top:28px">PURCHASE APPROVALS</div>'
+                          '<table class="tbl"><thead><tr><th>Request</th><th>Store</th><th>Item</th><th>OUSD</th><th>Status</th></tr></thead>'
+                          f'<tbody>{ap_rows or "<tr><td colspan=5 class=empty>None.</td></tr>"}</tbody></table>')
+        return (f"{flash}"
+                '<div class="divider">IDENTITY</div>'
+                + row("Name", e(agent["name"]), mono=True) + row("Agent ID", e(agent["id"]), mono=True)
+                + row("Owner", e(agent.get("owner_username") or "—")) + row("TAP-style key", key, mono=True)
+                + row("Description", e(agent.get("description") or "—")) + row("Created", e(_when(agent.get("created"))))
+                + '<div class="divider" style="margin-top:28px">MANDATES</div>' + table + purchases_html + approvals_html)
+    return (
+        f"{flash}"
+        '<div class="divider">IDENTITY</div>'
+        + row("Name", e(agent["name"]), mono=True) + row("Agent ID", e(agent["id"]), mono=True)
+        + row("TAP-style key", key, mono=True) + row("Description", e(agent.get("description") or "—"))
+        + f'<a class="btn" style="margin-top:14px" href="/agents/direct?agent={e(agent["id"], quote=True)}">Direct this agent</a>'
+        + '<div class="divider" style="margin-top:28px">GRANT AUTHORITY</div>'
+        '<p class="dim" style="margin-bottom:14px">A mandate is a permission slip you sign for this agent: which stores, how much per purchase, '
+        'how much in total, and for how long. Stores check it, along with the agent’s signed request, before they quote a price.</p>'
+        + form
+        + '<div class="divider" style="margin-top:28px">MANDATES</div>' + table
+        + purchases_html + approvals_html)
+
+# ── Direct an agent: send one of your agents shopping, using one of its mandates ─────────────────────────
+# The app plays the agent runtime for you: it has the wallet service sign the request with the agent's key and sign a
+# closed mandate for the exact order, then makes the same checkout request an outside agent would make, and (optionally)
+# asks the wallet to pay. Runs live in memory and are shown at /agents/run/<id>.
+_runs = {}
+_runs_lock = threading.Lock()
+RUN_TTL = 3600
+APPROVAL_WAIT = 300
+SKU_RE = re.compile(r"[A-Za-z0-9-]{1,40}")
+RUN_LABELS = {"running": ("Working…", "st-wait"), "waiting_approval": ("Waiting for your approval", "st-wait"),
+              "quoted": ("Quoted: nothing was paid", "st-ok"), "paid": ("Paid", "st-ok"),
+              "refused": ("Refused by the store", "st-err"), "declined": ("You declined the purchase", "st-err"),
+              "failed": ("Failed", "st-err")}
+
+def _err_text(e):
+    try:
+        return json.loads(e.read()).get("error") or f"error {e.code}"
+    except Exception:
+        return f"error {e.code}"
+
+def _run_step(run, text):
+    run["log"].append(text)
+
+def _run_agent(run):
+    """Background thread: one agent errand from start to quote or payment."""
+    try:
+        agent_id, username, sku = run["agent_id"], run["store"], run["sku"]
+        ms = _wallet_call("GET", f"/agents/{agent_id}/mandates")["mandates"]
+        mandate = next((x for x in ms if x["id"] == run["mandate_id"]), None)
+        if not mandate or mandate["status"] != "active":
+            run["status"] = "failed"
+            _run_step(run, "That mandate is not active any more, so the agent has no authority to act.")
+            return
+        _run_step(run, f"Agent {run['agent_name']} presents mandate {mandate['id']}: up to {_ousd(mandate['maxPerPurchase'])} per purchase, {_ousd(mandate['remaining'])} of {_ousd(mandate['budget'])} left.")
+        merchant = _wallet_call("GET", "/merchants/" + urllib.parse.quote(username, safe=""), timeout=10)
+        store_url = f"{run['base']}/shop/{urllib.parse.quote(username)}"
+        product = next((p for p in shop.products(username, store_url) if p["sku"].upper() == sku.upper()), None)
+        if not product:
+            run["status"] = "failed"
+            _run_step(run, f"{merchant['businessName'] or username} has no item {sku}.")
+            return
+        sku = product["sku"]
+        run["item_name"], run["price"] = product["name"], product["price"]
+        _run_step(run, f"The agent wants {product['name']} ({sku}) for {product['price']} OUSD from {merchant['businessName'] or username}.")
+        order = {"amount": product["price"], "currency": "OUSD", "merchant": username, "quantity": 1, "sku": sku}
+        path = f"/shop/{username}/checkout"
+
+        def attempt():
+            headers = _wallet_call("POST", "/agents/sign", {"agentId": agent_id, "authority": run["authority"], "path": path,
+                                                          "tag": "agent-payer-auth"})["headers"]
+            closed = _wallet_call("POST", f"/agents/{agent_id}/closed-mandate",
+                                  {"openJws": mandate["jws"], "order": order, "payee": merchant["address"]})["jws"]
+            status, resp = _checkout_core(run["base"], run["authority"], path, username, sku,
+                                          {"open": mandate["jws"], "closed": closed}, headers)
+            run["checks"] = resp.get("checks", run["checks"])
+            return status, resp
+
+        _run_step(run, "The agent signs its request (TAP style) and a closed mandate for exactly this order, then asks the store to check out.")
+        status, resp = attempt()
+        if resp.get("status") == "approval_required":
+            run["status"], run["approval_path"] = "waiting_approval", f"/approvals/{resp['approval']['id']}"
+            _run_step(run, "This store needs you to approve this exact purchase. Review it and approve with your passkey; the agent is waiting.")
+            deadline = time.time() + APPROVAL_WAIT
+            while time.time() < deadline:
+                time.sleep(3)
+                status, resp = attempt()
+                if status == 402:
+                    break
+                if "declined" in (resp.get("reason") or ""):
+                    run["status"] = "declined"
+                    _run_step(run, "You declined, so the store refused the purchase.")
+                    return
+            else:
+                run["status"] = "failed"
+                _run_step(run, "Nobody approved within 5 minutes, so the agent gave up.")
+                return
+            run["status"], run["approval_path"] = "running", None
+            _run_step(run, "Approved. The agent retries the checkout.")
+        if status != 402:
+            run["status"] = "refused"
+            _run_step(run, f"The store refused: {resp.get('reason') or resp.get('code')}")
+            return
+        run["quote"], run["order_id"] = resp["payment"], resp["orderId"]
+        _run_step(run, f"The store verified the agent and the mandate and quoted {resp['payment']['amount']} OUSD (order {resp['orderId']}). A signed mandate receipt came with it.")
+        if not run["pay"]:
+            run["status"] = "quoted"
+            _run_step(run, "You chose quote only, so nothing was paid. The quote is valid for 5 minutes.")
+            return
+        _run_step(run, "Paying from your wallet on Tempo testnet…")
+        try:
+            out = _wallet_call("POST", f"/agents/{agent_id}/pay", {"orderId": resp["orderId"]}, timeout=120)
+        except urllib.error.HTTPError as e:
+            run["status"] = "failed"
+            _run_step(run, f"The payment did not go through: {_err_text(e)}")
+            return
+        run["tx"], run["receipts"] = out.get("txHash"), sorted((out.get("receipts") or {}).keys())
+        run["status"] = "paid"
+        _run_step(run, "The store confirmed the transfer on-chain and issued a signed payment receipt. Done.")
+    except urllib.error.HTTPError as e:
+        run["status"] = "failed"
+        _run_step(run, f"Something was refused along the way: {_err_text(e)}")
+    except Exception as e:
+        run["status"] = "failed"
+        _run_step(run, f"Something went wrong: {e}")
+
+def _start_run(sub, agent, mandate_id, store, sku, pay, base):
+    now = time.time()
+    with _runs_lock:
+        for k in [k for k, v in _runs.items() if now - v["created"] > RUN_TTL]:
+            del _runs[k]
+        active = [v for v in _runs.values() if v["sub"] == sub and v["status"] in ("running", "waiting_approval")]
+        if len(active) >= 3:
+            return None
+        run = {"id": "run_" + secrets.token_hex(8), "sub": sub, "agent_id": agent["id"], "agent_name": agent["name"],
+               "mandate_id": mandate_id, "store": store, "sku": sku, "pay": pay, "created": now, "status": "running",
+               "log": [], "checks": [], "base": base, "authority": urllib.parse.urlparse(base).netloc,
+               "approval_path": None, "quote": None, "order_id": None, "tx": None, "receipts": [], "item_name": None, "price": None}
+        _runs[run["id"]] = run
+    threading.Thread(target=_run_agent, args=(run,), daemon=True).start()
+    return run
+
+def _run_html(run):
+    e = html.escape
+    label, cls = RUN_LABELS[run["status"]]
+    active = run["status"] in ("running", "waiting_approval")
+    def row(k, v, mono=False):
+        return f'<div class="info-row"><span class="info-label">{e(k)}</span><span class="info-val{" mono" if mono else ""}">{v}</span></div>'
+    item = f'{e(run["item_name"])} <span class="dim">{e(run["sku"])}</span> · {e(run["price"])} OUSD' if run["item_name"] else e(run["sku"])
+    out = (f'<div class="divider">THE ERRAND</div>'
+           + row("Status", f'<span class="{cls}">{e(label)}</span>')
+           + row("Agent", e(run["agent_name"]), True) + row("Mandate", e(run["mandate_id"]), True)
+           + row("Store", e(run["store"]), True) + row("Item", item)
+           + row("Action", "Pay" if run["pay"] else "Quote only"))
+    if run["approval_path"] and run["status"] == "waiting_approval":
+        out += f'<a class="btn" style="margin-top:14px" href="{e(run["approval_path"], quote=True)}">Review and approve this purchase</a>'
+    out += '<div class="divider" style="margin-top:28px">WHAT THE AGENT DID</div><ol class="steps">' + "".join(f"<li>{e(t)}</li>" for t in run["log"]) + ("<li class=\"dim\">…</li>" if active else "") + "</ol>"
+    if run["checks"]:
+        rows = "".join(f'<tr><td class="{"st-ok" if c.get("ok") else "st-err"}">{"✔" if c.get("ok") else "✘"}</td><td class="mono">{e(c["name"])}</td><td>{e(c.get("detail", ""))}</td></tr>' for c in run["checks"])
+        out += ('<div class="divider" style="margin-top:28px">WHAT THE STORE CHECKED</div>'
+                f'<table class="tbl"><thead><tr><th></th><th>Check</th><th>Result</th></tr></thead><tbody>{rows}</tbody></table>')
+    if run["quote"]:
+        out += ('<div class="divider" style="margin-top:28px">QUOTE AND PAYMENT</div>'
+                + row("Order", e(run["order_id"]), True) + row("Amount", f'{e(run["quote"]["amount"])} OUSD')
+                + row("Pay to", e(run["quote"]["payTo"]), True))
+        if run["tx"]:
+            out += row("Transaction", _explorer_link("tx", run["tx"], e(run["tx"][:18]) + "…"), True)
+            out += row("Receipts", e(" and ".join(run["receipts"]) or "—") + " (signed by the store)")
+    nav = f'<a class="btn" style="margin-top:28px" href="/agents/direct?agent={e(run["agent_id"], quote=True)}">Direct another errand</a>'
+    refresh = '<script>setTimeout(function () { location.reload(); }, 2500);</script>' if active else ""
+    return out + nav + refresh
+
+def _direct_html(agents, mandates, merchants, csrf, flash="", pick="", runs=()):
+    e = html.escape
+    if not agents:
+        return f'{flash}<p class="dim">You need an agent first. <a href="/agents">Create one</a>.</p>'
+    data = json.dumps({"agents": [{"id": a["id"], "name": a["name"]} for a in agents],
+                       "mandates": [{"id": m["id"], "agentId": m["agentId"], "merchants": m["merchants"], "maxPerPurchase": m["maxPerPurchase"],
+                                     "remaining": m["remaining"]} for m in mandates],
+                       "stores": [{"username": m["username"], "name": m["businessName"]} for m in merchants]}).replace("</", "<\\/")
+    agent_opts = "".join(f'<option value="{e(a["id"], quote=True)}"{" selected" if a["id"] == pick else ""}>{e(a["name"])}</option>' for a in agents)
+    recent = "".join(
+        f'<tr><td class="mono"><a href="/agents/run/{e(r["id"], quote=True)}">{e(r["id"][4:12])}</a></td><td>{e(r["store"])}</td><td>{e(r["sku"])}</td>'
+        f'<td>{"pay" if r["pay"] else "quote"}</td><td class="{RUN_LABELS[r["status"]][1]}">{e(RUN_LABELS[r["status"]][0])}</td></tr>' for r in runs)
+    form = f"""{flash}
+<div class="divider">DIRECT AN AGENT</div>
+<p class="dim" style="margin-bottom:14px">Send one of your agents on an errand. It can only act within the mandate you choose, and the store checks it exactly as it would check any outside agent.</p>
+<form id="directform" class="send-form" method="post" action="/agents/direct">
+<input type="hidden" name="csrf" value="{e(csrf, quote=True)}">
+<label class="info-label" for="d-agent">Agent</label>
+<select class="field" id="d-agent" name="agent">{agent_opts}</select>
+<label class="info-label" for="d-mandate">Mandate</label>
+<select class="field" id="d-mandate" name="mandate"></select>
+<label class="info-label" for="d-store">Store</label>
+<select class="field" id="d-store" name="store"></select>
+<label class="info-label" for="d-sku">Item ID</label>
+<input class="field" id="d-sku" name="sku" list="d-items" placeholder="VSE-010" autocomplete="off" required pattern="[A-Za-z0-9\\-]{{1,40}}">
+<datalist id="d-items"></datalist>
+<label class="info-label">What should the agent do?</label>
+<div class="checks">
+<label class="check"><input type="radio" name="mode" value="quote" checked> Quote only: check out and get a price, pay nothing</label>
+<label class="check"><input type="radio" name="mode" value="pay"> Pay: buy it from my wallet if the store accepts</label>
+</div>
+<button class="btn" id="d-go" type="submit">Send the agent</button>
+</form>
+<script type="application/json" id="direct-data">{data}</script>
+<script>
+(function () {{
+  var D = JSON.parse(document.getElementById('direct-data').textContent);
+  var agent = document.getElementById('d-agent'), mandate = document.getElementById('d-mandate'),
+      store = document.getElementById('d-store'), sku = document.getElementById('d-sku'),
+      items = document.getElementById('d-items'), go = document.getElementById('d-go');
+  function opt(v, t, sel) {{ var o = document.createElement('option'); o.value = v; o.textContent = t; if (sel) o.selected = true; return o; }}
+  function current() {{ return D.mandates.filter(function (m) {{ return m.id === mandate.value; }})[0]; }}
+  function fillStores() {{
+    var keep = store.value, m = current();
+    store.textContent = '';
+    D.stores.forEach(function (s) {{
+      var ok = m && m.merchants.indexOf(s.username) >= 0;
+      store.appendChild(opt(s.username, s.name + ' (' + s.username + ')' + (ok ? '' : ' - not on this mandate'), s.username === keep));
+    }});
+    fillItems();
+  }}
+  function fillMandates() {{
+    mandate.textContent = '';
+    var list = D.mandates.filter(function (m) {{ return m.agentId === agent.value; }});
+    list.forEach(function (m) {{ mandate.appendChild(opt(m.id, m.id + ' - up to ' + m.maxPerPurchase + ' each, ' + m.remaining + ' left')); }});
+    if (!list.length) mandate.appendChild(opt('', 'No active mandate for this agent'));
+    go.disabled = !list.length;
+    fillStores();
+  }}
+  function fillItems() {{
+    items.textContent = '';
+    if (!store.value) return;
+    fetch('/shop/' + encodeURIComponent(store.value) + '/catalog.json').then(function (r) {{ return r.json(); }}).then(function (c) {{
+      c.products.forEach(function (p) {{ var o = document.createElement('option'); o.value = p.sku; o.label = p.name + ' - ' + p.price + ' OUSD'; items.appendChild(o); }});
+      sku.placeholder = c.products[0] ? c.products[0].sku : '';
+    }}).catch(function () {{}});
+  }}
+  agent.addEventListener('change', fillMandates);
+  mandate.addEventListener('change', fillStores);
+  store.addEventListener('change', fillItems);
+  document.getElementById('directform').addEventListener('submit', function (e) {{
+    var pay = document.querySelector('input[name=mode]:checked').value === 'pay';
+    if (pay && !confirm('The agent will pay for ' + sku.value + ' from your wallet if the store accepts it. Continue?')) {{ e.preventDefault(); return; }}
+    go.disabled = true;
+  }});
+  fillMandates();
+}}());
+</script>"""
+    if runs:
+        form += ('<div class="divider" style="margin-top:28px">RECENT ERRANDS</div>'
+                 '<table class="tbl"><thead><tr><th>Run</th><th>Store</th><th>Item</th><th>Action</th><th>Status</th></tr></thead>'
+                 f'<tbody>{recent}</tbody></table>')
+    return form
+
+def _checkout_core(base_url, authority, path, username, sku, mandates, sig_headers):
+    """What a store does with a checkout request. Returns (http status, response dict). Used by the public
+    endpoint and by 'Direct an agent', which makes the same request the agent would."""
+    try:
+        m = _wallet_call("GET", "/merchants/" + urllib.parse.quote(username, safe=""), timeout=10)
+    except urllib.error.HTTPError as e:
+        return (404 if e.code == 404 else 503), {"status": "rejected", "code": "no_such_store"}
+    except Exception:
+        return 503, {"status": "rejected", "code": "unavailable"}
+    store_url = f"{base_url}/shop/{urllib.parse.quote(m['username'])}"
+    product = next((p for p in shop.products(m["username"], store_url) if p["sku"] == sku), None)
+    if not product:
+        return 404, {"status": "rejected", "code": "unknown_sku", "reason": f"This store has no product {sku[:40]!r}."}
+    order = {"amount": product["price"], "currency": "OUSD", "merchant": m["username"], "quantity": 1, "sku": product["sku"]}
+    request = {"method": "POST", "authority": authority, "path": path, "headers": sig_headers}
+    try:
+        out = _wallet_call("POST", "/merchants/" + urllib.parse.quote(m["username"], safe="") + "/verify-checkout",
+                           {"request": request, "order": order,
+                            "mandates": {"open": mandates.get("open"), "closed": mandates.get("closed")},
+                            "policy": shop.policy(m), "meta": {"name": product["name"]}, "issuer": store_url}, timeout=15)
+    except Exception:
+        return 503, {"status": "rejected", "code": "unavailable"}
+    checks = out.get("checks", [])
+    if out.get("ok"):
+        return 402, {"status": "payment_required", "orderId": out["orderId"], "payment": out["payment"],
+                     "order": order, "agent": out.get("agent"), "mandateId": out.get("mandateId"), "checks": checks,
+                     "receipts": out.get("receipts", {})}
+    why = next((c["detail"] for c in checks if not c.get("ok")), "rejected")
+    resp = {"status": "rejected", "code": out.get("code"), "reason": why, "agent": out.get("agent"), "checks": checks}
+    if out.get("receipts"):
+        resp["receipts"] = out["receipts"]
+    ap = out.get("approval")
+    if ap:
+        resp["approval"] = {"id": ap["id"], "status": ap["status"], "url": f"{base_url}/approvals/{ap['id']}",
+                            "expiresAt": ap["expiresAt"], "item": ap.get("item"), "amount": ap["amount"], "currency": ap["currency"]}
+        if ap["status"] == "pending":
+            resp["status"] = "approval_required"
+    return out.get("httpStatus", 403), resp
+
+def _agent_page(body, title="AGENT", subtitle="Identity and mandates", back_href="/agents", back_text="Back to my agents"):
+    return _render("agent_detail.html", AGENT_BODY=body, TITLE=html.escape(title), SUBTITLE=html.escape(subtitle),
+                   BACK_HREF=html.escape(back_href, quote=True), BACK_TEXT=html.escape(back_text))
+
+def _approval_card(a, csrf=None):
+    """One purchase approval request. With csrf and status pending it carries the Approve / Decline buttons."""
+    e = html.escape
+    cls = {"approved": "st-ok", "used": "st-ok", "pending": "st-wait", "rejected": "st-err", "expired": "st-err"}.get(a["status"], "")
+    label = {"used": "approved, quote issued"}.get(a["status"], a["status"])
+    def row(k, v, mono=False):
+        return (f'<div class="info-row"><span class="info-label">{e(k)}</span><span class="info-val{" mono" if mono else ""}">{v}</span></div>')
+    out = (row("Status", f'<span class="{cls}">{e(label)}</span>')
+           + row("Store", f'{e(a["businessName"])} <span class="dim">({e(a["merchant"])})</span>')
+           + row("Item", f'{e(a.get("item") or a["sku"])} <span class="dim">{e(a["sku"])}</span>')
+           + row("Price", f'{e(_ousd(a["amount"]))} {e(a["currency"])}')
+           + row("Agent", e(a["agentName"]), mono=True)
+           + row("Under mandate", e(a["mandateId"]), mono=True)
+           + row("Asked", e(_when(_iso_to_epoch(a["createdAt"]))))
+           + row("Valid until", e(_when(_iso_to_epoch(a["expiresAt"])))))
+    if csrf and a["status"] == "pending":
+        base = f'/approvals/{e(a["id"], quote=True)}'
+        hidden = f'<input type="hidden" name="csrf" value="{e(csrf, quote=True)}">'
+        out += (f'<form class="send-form" method="post" action="{base}/approve" '
+                f'data-confirm="You will be asked to sign in again with your passkey to approve this exact purchase. Continue?">{hidden}'
+                '<button class="btn" type="submit">Approve this purchase with passkey</button></form>'
+                f'<form class="send-form" method="post" action="{base}/reject">{hidden}'
+                '<button class="btn btn-secondary" type="submit">Decline</button></form>')
+    return out
+
+def _identity_cell(a):
+    kid = a.get("keyid")
+    if not kid:
+        return '<span class="st-wait">pending</span>'
+    k = html.escape(kid, quote=True)
+    return f'<a href="/tap/keys/{k}" target="_blank" rel="noopener">{html.escape(kid[:10])}…</a>'
+
 def _agents_html(agents, csrf, prefix, flash=""):
     rows = "".join(
         "<tr>"
-        f'<td class="mono">{html.escape(a["name"])}</td>'
+        f'<td class="mono"><a href="/agents/{html.escape(a["id"], quote=True)}">{html.escape(a["name"])}</a></td>'
         f'<td class="agent-desc">{html.escape(a.get("description") or "")}</td>'
-        f'<td>{html.escape(_when(a.get("created")))}</td>'
-        f'<td class="mono">{html.escape(a["id"])}</td></tr>'
+        f'<td class="mono">{_identity_cell(a)}</td>'
+        f'<td>{html.escape(_when(a.get("created")))}</td></tr>'
         for a in agents) or ('<tr><td colspan="4" class="empty">You haven’t created any agents yet.</td></tr>')
     return (
         f"{flash}"
@@ -360,7 +910,7 @@ def _agents_html(agents, csrf, prefix, flash=""):
         'placeholder="What should this agent do?"></textarea>'
         '<button class="btn" type="submit">Create agent</button></form>'
         '<div class="divider" style="margin-top:28px">MY AGENTS</div>'
-        '<table class="tbl"><thead><tr><th>Name</th><th>Description</th><th>Created</th><th>ID</th></tr></thead>'
+        '<table class="tbl"><thead><tr><th>Name</th><th>Description</th><th>TAP identity</th><th>Created</th></tr></thead>'
         f"<tbody>{rows}</tbody></table>")
 
 def _send_form(wallets, csrf):
@@ -384,27 +934,100 @@ def _send_form(wallets, csrf):
         f'placeholder="e.g. Q4 bonus"{off}>'
         f'<button class="btn" type="submit"{off}>Send from treasury</button></form>')
 
-def _admin_html(treasury, wallets, csrf="", flash=""):
+def _public_base(handler):
+    """The public address merchant storefront URLs are registered under."""
+    return KC_PUBLIC if KC_PUBLIC != KEYCLOAK_BASE else _base_url(handler)
+
+def _visa_cell(w, csrf, base):
+    """Visa column: merchants get a Register button (admin only); everyone else a dash."""
+    if "merchant" not in (w.get("role") or ""):
+        return "—"
+    v = w.get("visa") or {}
+    view = (f'<div class="small"><a href="/treasury/visa/{urllib.parse.quote(w.get("sub", ""), safe="")}">'
+            "View Visa record</a></div>") if v.get("merchantId") else ""
+    if v.get("status") == "registered":
+        mid = v.get("merchantId") or ""
+        return (f'<span class="st-ok" title="{html.escape(mid, quote=True)}">✔ registered</span> '
+                f'<span class="mono dim">{html.escape(mid[:8])}…</span>{view}')
+    business = w.get("businessName") or ""
+    if not business:
+        return '<span class="st-wait" title="The merchant gave no business name at sign-up.">needs business name</span>'
+    url = f'{base}/shop/{urllib.parse.quote(w.get("username") or "")}'
+    label = {"partial": "Finish registration", "failed": "Retry"}.get(v.get("status"), "Register with Visa")
+    confirm = (f"Register {business} with Visa’s sandbox? URL: {url} — this creates a permanent record "
+               "at Visa that cannot be deleted from here.")
+    err = f'<div class="st-err small">{html.escape(v["error"])}</div>' if v.get("error") else ""
+    return (f'<form method="post" action="/treasury/register-merchant" class="inline-form" '
+            f'data-confirm="{html.escape(confirm, quote=True)}">'
+            f'<input type="hidden" name="csrf" value="{html.escape(csrf, quote=True)}">'
+            f'<input type="hidden" name="sub" value="{html.escape(w.get("sub", ""), quote=True)}">'
+            f'<button class="btn-mini" type="submit">{label}</button></form>{err}{view}')
+
+def _visa_record_html(data):
+    """Admin page body: a merchant's live record from Visa's registry (public keys only)."""
+    e = html.escape
+    rec = data.get("record") or {}
+    def val(v):
+        if v in (None, ""):
+            return "—"
+        return e(re.sub(r"^(\d{4}-\d{2}-\d{2})T", r"\1 ", str(v)))
+    def row(label, value, mono=False):
+        cls = "info-val mono" if mono else "info-val"
+        return f'<div class="info-row"><span class="info-label">{e(label)}</span><span class="{cls}">{value}</span></div>'
+    notice = ""
+    if data.get("ourStatus") != "registered":
+        notice = ('<div class="flash flash-info" role="status">This merchant exists at Visa, but our records show the '
+                  f'registration as “{e(str(data.get("ourStatus")))}”. Use the button on the treasury page to finish it.</div>')
+    url = rec.get("merchantUrl") or ""
+    url_html = (f'<a href="{e(url, quote=True)}" target="_blank" rel="noopener">{e(url)}</a>' if url.startswith("http") else val(url))
+    keys = "".join(
+        "<tr>"
+        f'<td>{val(k.get("keyName"))}</td><td class="mono">{e((k.get("id") or "")[:8])}…</td>'
+        f'<td>{val(k.get("algorithm"))}<div class="dim small">{val(k.get("encryptionType"))}</div></td>'
+        f'<td>{val(k.get("expirationDate"))}</td><td class="mono">{val(k.get("fingerprint"))}</td></tr>'
+        for k in rec.get("keys", [])) or '<tr><td colspan="5" class="empty">Visa lists no keys for this merchant.</td></tr>'
+    raw = e(json.dumps(rec, indent=2))
+    return (
+        f"{notice}"
+        '<div class="divider">MERCHANT AT VISA</div>'
+        + row("Name", val(rec.get("merchantName")))
+        + row("Visa merchant ID", val(rec.get("id")), mono=True)
+        + row("VMID", val(rec.get("vmid")), mono=True)
+        + row("URL", url_html)
+        + row("Indicator", val(rec.get("indicator")))
+        + row("Active", "yes" if rec.get("isActive") else val(rec.get("isActive")))
+        + row("Cryptogram type", val(rec.get("cryptogramType")))
+        + row("Payment payload", val(rec.get("paymentPayloadType")))
+        + row("Created (as Visa reports it)", val(rec.get("createdAt")))
+        + '<div class="divider" style="margin-top:28px">ENCRYPTION KEYS</div>'
+        '<table class="tbl"><thead><tr><th>Name</th><th>Key ID</th><th>Algorithm</th><th>Expires</th><th>Fingerprint</th></tr></thead>'
+        f"<tbody>{keys}</tbody></table>"
+        f'<details class="raw"><summary>Raw record from Visa</summary><pre>{raw}</pre></details>')
+
+def _admin_html(treasury, wallets, csrf="", flash="", base=""):
     total =sum((Decimal(w["balance"]) for w in wallets if w.get("balance") is not None), Decimal(0))
     rows = []
     for w in wallets:
         addr = w.get("address", "")
+        business = (f'<div class="dim small">{html.escape(w["businessName"])}</div>'
+                    if "merchant" in (w.get("role") or "") and w.get("businessName") else "")
         rows.append(
             "<tr>"
-            f'<td>{html.escape(w.get("username") or "—")}</td>'
+            f'<td>{html.escape(w.get("username") or "—")}{business}</td>'
             f'<td>{html.escape(w.get("role") or "user")}</td>'
             f'<td class="mono"><a href="{EXPLORER}/address/{html.escape(addr, quote=True)}" '
             f'target="_blank" rel="noopener">{html.escape(addr[:8])}…{html.escape(addr[-6:])}</a></td>'
-            f'<td class="num">{_ousd(w.get("balance"))}</td></tr>')
+            f'<td class="num">{_usd(w.get("balance"))}</td>'
+            f'<td>{_visa_cell(w, csrf, base)}</td></tr>')
     if not rows:
-        rows.append('<tr><td colspan="4" class="empty">No wallets yet — one is created the first '
+        rows.append('<tr><td colspan="5" class="empty">No wallets yet — one is created the first '
                     "time each user signs in.</td></tr>")
     taddr = treasury.get("address", "")
     return (
         f"{flash}"
         '<div class="divider">TREASURY</div>'
         '<div class="info-row"><span class="info-label">Balance</span>'
-        f'<span class="info-val big">{_ousd(treasury.get("balance"))} {html.escape(treasury.get("symbol", "OUSD"))}</span></div>'
+        f'<span class="info-val big">{_usd(treasury.get("balance"))} {html.escape(treasury.get("symbol", "OUSD"))}</span></div>'
         '<div class="info-row"><span class="info-label">Wallet</span>'
         f'<span class="info-val mono"><a href="{EXPLORER}/address/{html.escape(taddr, quote=True)}" '
         f'target="_blank" rel="noopener">{html.escape(taddr[:10])}…{html.escape(taddr[-8:])}</a></span></div>'
@@ -415,9 +1038,9 @@ def _admin_html(treasury, wallets, csrf="", flash=""):
         '<div class="info-row"><span class="info-label">Users with wallets</span>'
         f'<span class="info-val">{len(wallets)}</span></div>'
         '<div class="info-row" style="margin-bottom:16px"><span class="info-label">Held by users</span>'
-        f'<span class="info-val">{_ousd(total)} OUSD</span></div>'
+        f'<span class="info-val">{_usd(total)} OUSD</span></div>'
         '<table class="tbl"><thead><tr><th>User</th><th>Role</th><th>Wallet</th><th class="num">OUSD</th>'
-        f'</tr></thead><tbody>{"".join(rows)}</tbody></table>')
+        f'<th>Visa</th></tr></thead><tbody>{"".join(rows)}</tbody></table>')
 
 # ── Request handler ───────────────────────────────────────────────────────────
 class DemoHandler(http.server.BaseHTTPRequestHandler):
@@ -445,6 +1068,18 @@ class DemoHandler(http.server.BaseHTTPRequestHandler):
         elif p.path == "/treasury":   self._admin()
         elif p.path == "/wallet":     self._wallet()
         elif p.path == "/agents":     self._agents()
+        elif p.path == "/agents/direct": self._direct_form(qs)
+        elif re.fullmatch(r"/agents/run/run_[0-9a-f]{16}", p.path): self._run_page(p.path)
+        elif re.fullmatch(r"/agents/agt_[0-9a-f]{12}", p.path): self._agent_detail(p.path)
+        elif p.path == "/approvals":  self._approvals()
+        elif re.fullmatch(r"/approvals/apr_[0-9a-f]{12}", p.path): self._approval_detail(p.path)
+        elif p.path == "/tap/keys" or p.path.startswith("/tap/keys/"): self._tap_keys(p.path, qs)
+        elif p.path == "/keys":       self._tap_keys(p.path, qs)
+        elif re.fullmatch(r"/shop/[^/]+/orders/ord_[0-9a-f]{12}", p.path): self._shop_order(p.path)
+        elif p.path.startswith("/shop/"): self._shop(p.path)
+        elif p.path.startswith("/treasury/visa/"): self._visa_record(p.path)
+        elif p.path == "/treasury/agents": self._all_agents()
+        elif re.fullmatch(r"/treasury/agents/agt_[0-9a-f]{12}", p.path): self._admin_agent(p.path)
         elif p.path.startswith("/static/"): self._static(p.path)
         else: _html(self, "<h1>404</h1>", 404)
 
@@ -465,12 +1100,14 @@ class DemoHandler(http.server.BaseHTTPRequestHandler):
             roles = claims.get("roles") or []
             admin_html = ('<div class="admin-banner" role="status">★ &nbsp; ADMIN ACCESS &nbsp; ★'
                           '<span>You are signed in as an administrator</span>'
-                          '<a class="admin-link" href="/treasury">Treasury &amp; wallets →</a></div>'
+                          '<a class="admin-link" href="/treasury">Treasury &amp; wallets →</a> '
+                          '<a class="admin-link" href="/treasury/agents">All agents →</a></div>'
                           if "admin" in roles else "")
             agents_btn = ('<a class="btn" href="/agents" style="margin-bottom: 12px">My agents</a>'
                           if _is_user(claims) else "")
             body = _render("logged_in.html", NAME=name, USERNAME=username, EMAIL=email,
-                           FLASH=flash_html, ADMIN_BANNER=admin_html, AGENTS_BUTTON=agents_btn)
+                           FLASH=flash_html, ADMIN_BANNER=admin_html, AGENTS_BUTTON=agents_btn,
+                           WALLET_SUMMARY=_wallet_summary(claims))
         else:
             body = _render("splash.html")
         _html(self, body)
@@ -481,6 +1118,20 @@ class DemoHandler(http.server.BaseHTTPRequestHandler):
             self._treasury_send()
         elif path == "/agents":
             self._agents_create()
+        elif path == "/agents/direct":
+            self._direct_start()
+        elif re.fullmatch(r"/approvals/apr_[0-9a-f]{12}/(approve|reject)", path):
+            self._approval_decide(path)
+        elif re.fullmatch(r"/agents/agt_[0-9a-f]{12}/mandates", path):
+            self._mandate_create(path)
+        elif re.fullmatch(r"/agents/agt_[0-9a-f]{12}/mandates/mnd_[0-9a-f]{12}/revoke", path):
+            self._mandate_revoke(path)
+        elif path == "/treasury/register-merchant":
+            self._merchant_register()
+        elif path.startswith("/shop/") and path.endswith("/checkout"):
+            self._shop_checkout(path)
+        elif re.fullmatch(r"/shop/[^/]+/orders/ord_[0-9a-f]{12}/confirm", path):
+            self._shop_confirm(path)
         elif path == "/internal/device-user":
             self._device_user()
         else:
@@ -511,7 +1162,437 @@ class DemoHandler(http.server.BaseHTTPRequestHandler):
                       if flash else "")
         prefix = _agent_fullname(claims, "")[:-1]
         _html(self, _render("agents.html",
-                            AGENTS_BODY=_agents_html(_agents_of(claims["sub"]), csrf, prefix, flash_html)))
+                            AGENTS_BODY=_agents_html(_agents_backfill(_agents_of(claims["sub"])),
+                                                     csrf, prefix, flash_html)))
+
+    # ── /tap/keys  (public registry of agent public keys: TAP-style key directory) ─
+    def _tap_keys(self, path, qs):
+        """Public key lookup. Visa's TAP spec: GET /keys with a keyID parameter returns the key's JWK;
+        /tap/keys and /tap/keys/<kid> are kept as aliases."""
+        try:
+            keys = _wallet_call("GET", "/agents/keys", timeout=10)["keys"]
+        except Exception:
+            _json(self, {"error": "key registry unavailable"}, 503)
+            return
+        kid = path[len("/tap/keys/"):] if path.startswith("/tap/keys/") else next(
+            (v[0] for k, v in qs.items() if k.lower() in ("keyid", "kid") and v), None)
+        if kid is None:
+            _json(self, {"keys": keys})
+            return
+        key = next((k for k in keys if k.get("kid") == kid), None)
+        _json(self, key if key else {"error": "unknown key id"}, 200 if key else 404)
+
+    # ── /treasury/agents  (admin: every agent from every user) ────────────────
+    def _all_agents(self):
+        claims = (_sessions.get(_get_sid(self)) or {}).get("claims")
+        if not claims:
+            _redirect(self, "/")
+            return
+        if "admin" not in (claims.get("roles") or []):
+            _html(self, "<h1>403</h1><p>Administrators only. <a href='/'>Back</a></p>", 403)
+            return
+        try:
+            kids = {k.get("kid") for k in _wallet_call("GET", "/agents/keys", timeout=10)["keys"]}
+            ok = True
+        except Exception:
+            kids, ok = set(), False
+        _html(self, _render("all_agents.html", ALL_AGENTS_BODY=_all_agents_html(_agents_all(), kids, ok)))
+
+    # ── /treasury/agents/<id>  (admin: read-only view of any agent and its mandates) ──
+    def _admin_agent(self, path):
+        claims = (_sessions.get(_get_sid(self)) or {}).get("claims")
+        if not claims:
+            _redirect(self, "/")
+            return
+        if "admin" not in (claims.get("roles") or []):
+            _html(self, "<h1>403</h1><p>Administrators only. <a href='/'>Back</a></p>", 403)
+            return
+        agent_id = path.rsplit("/", 1)[1]
+        agent = next((a for a in _agents_all() if a.get("id") == agent_id), None)
+        if not agent:
+            _html(self, "<h1>404</h1><p>No such agent. <a href='/treasury/agents'>Back</a></p>", 404)
+            return
+        q = urllib.parse.quote(agent.get("owner_sub") or "", safe="")
+        try:
+            mandates = [m for m in _wallet_call("GET", "/mandates?sub=" + q)["mandates"] if m.get("agentId") == agent_id]
+            approvals = [a for a in _wallet_call("GET", "/approvals?sub=" + q)["approvals"] if a.get("agentId") == agent_id]
+            orders = [o for o in _wallet_call("GET", "/orders?sub=" + q)["orders"] if o.get("agentId") == agent_id]
+            body = _agent_detail_html(agent, mandates, [], "", "", approvals, readonly=True, orders=orders)
+        except Exception as ex:
+            body = f'<div class="flash flash-err" role="status">Wallet service unreachable: {html.escape(str(ex))}</div>'
+        page = _agent_page(body, subtitle="Admin view · read only", back_href="/treasury/agents", back_text="Back to all agents")
+        _html(self, page)
+
+    # ── /treasury/visa/<sub>  (admin: a merchant's live record from Visa's registry) ──
+    def _visa_record(self, path):
+        claims = (_sessions.get(_get_sid(self)) or {}).get("claims")
+        if not claims:
+            _redirect(self, "/")
+            return
+        if "admin" not in (claims.get("roles") or []):
+            _html(self, "<h1>403</h1><p>Administrators only. <a href='/'>Back</a></p>", 403)
+            return
+        sub = urllib.parse.unquote(path[len("/treasury/visa/"):]).strip("/")
+        try:
+            data = _wallet_call("GET", "/merchants/" + urllib.parse.quote(sub, safe="") + "/visa", timeout=40)
+            body = _visa_record_html(data)
+        except urllib.error.HTTPError as ex:
+            try:
+                msg = json.loads(ex.read()).get("error") or f"error {ex.code}"
+            except Exception:
+                msg = f"error {ex.code}"
+            body = f'<div class="flash flash-err" role="status">{html.escape(msg)}</div>'
+        except Exception as ex:
+            body = f'<div class="flash flash-err" role="status">Wallet service unreachable: {html.escape(str(ex))}</div>'
+        _html(self, _render("visa_record.html", VISA_BODY=body))
+
+    # ── POST /shop/<username>/checkout  (public: a signed agent asks to buy) ──
+    def _shop_checkout(self, path):
+        parts = path[len("/shop/"):].strip("/").split("/")
+        if len(parts) != 2:
+            _json(self, {"status": "rejected", "code": "not_found"}, 404)
+            return
+        username = urllib.parse.unquote(parts[0])
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+            if length > 20000:
+                raise ValueError("body too large")
+            body = json.loads(self.rfile.read(length) or b"{}")
+            sku = body["sku"]
+            mandates = body.get("mandates") or {}
+            if not isinstance(sku, str) or not isinstance(mandates, dict):
+                raise ValueError("bad fields")
+        except (ValueError, KeyError, TypeError):
+            _json(self, {"status": "rejected", "code": "bad_request",
+                         "reason": 'Send JSON like {"sku": "...", "mandates": {"open": "...", "closed": "..."}}.'}, 400)
+            return
+        sig_headers = {k: self.headers.get(k) for k in ("Signature-Input", "Signature") if self.headers.get(k)}
+        authority = self.headers.get("X-Forwarded-Host") or self.headers.get("Host") or ""
+        status, resp = _checkout_core(_public_base(self), authority, urllib.parse.urlparse(self.path).path, username, sku, mandates, sig_headers)
+        _json(self, resp, status)
+
+    # ── GET /shop/<u>/orders/<id>  and  POST /shop/<u>/orders/<id>/confirm  (public, for agents and the store) ──
+    def _order_public(self, o):
+        return {"orderId": o["id"], "status": o["status"], "sku": o["sku"], "item": o["item"], "amount": o["amount"],
+                "currency": o["currency"], "expiresAt": o["expiresAt"], "txHash": o["txHash"], "paidAt": o["paidAt"],
+                "receipts": o["receipts"]}
+
+    def _shop_order(self, path):
+        _, _, user, _, oid = path.split("/")
+        try:
+            o = _wallet_call("GET", f"/orders/{oid}", timeout=10)
+        except urllib.error.HTTPError:
+            _json(self, {"status": "rejected", "code": "no_such_order"}, 404)
+            return
+        except Exception:
+            _json(self, {"status": "rejected", "code": "unavailable"}, 503)
+            return
+        if o["merchant"].lower() != urllib.parse.unquote(user).lower():
+            _json(self, {"status": "rejected", "code": "no_such_order"}, 404)
+            return
+        _json(self, self._order_public(o))
+
+    def _shop_confirm(self, path):
+        _, _, user, _, oid, _ = path.split("/")
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+            if length > 2000:
+                raise ValueError("body too large")
+            tx = json.loads(self.rfile.read(length) or b"{}")["txHash"]
+            if not isinstance(tx, str):
+                raise ValueError("bad txHash")
+        except (ValueError, KeyError, TypeError):
+            _json(self, {"status": "rejected", "code": "bad_request", "reason": 'Send JSON like {"txHash": "0x..."}.'}, 400)
+            return
+        try:
+            o = _wallet_call("POST", f"/merchants/{urllib.parse.quote(urllib.parse.unquote(user), safe='')}/orders/{oid}/confirm", {"txHash": tx}, timeout=45)
+        except urllib.error.HTTPError as e:
+            try:
+                msg = json.loads(e.read()).get("error") or f"error {e.code}"
+            except Exception:
+                msg = f"error {e.code}"
+            _json(self, {"status": "rejected", "code": "not_confirmed", "reason": msg}, e.code if e.code in (400, 404, 409) else 502)
+            return
+        except Exception:
+            _json(self, {"status": "rejected", "code": "unavailable"}, 503)
+            return
+        _json(self, self._order_public(o))
+
+    # ── /shop/<username>[/catalog.json]  (public merchant storefront) ─────────
+    def _shop(self, path):
+        parts = path[len("/shop/"):].strip("/").split("/")
+        username = urllib.parse.unquote(parts[0]) if parts and parts[0] else ""
+        what = parts[1] if len(parts) == 2 else ""
+        if not username or len(parts) > 2 or what not in ("", "catalog.json"):
+            _html(self, shop.not_found(username), 404)
+            return
+        try:
+            m = _wallet_call("GET", "/merchants/" + urllib.parse.quote(username, safe=""), timeout=10)
+        except urllib.error.HTTPError as e:
+            if e.code == 404:
+                _html(self, shop.not_found(username), 404)
+            else:
+                _html(self, "<h1>This store is unavailable right now.</h1>", 503)
+            return
+        except Exception:
+            _html(self, "<h1>This store is unavailable right now.</h1>", 503)
+            return
+        store_url = f"{_public_base(self)}/shop/{urllib.parse.quote(m['username'])}"
+        if what == "catalog.json":
+            _json(self, shop.catalog(m, store_url))
+        else:
+            _html(self, shop.render(m, store_url))
+
+    # ── /agents/direct  (pick agent, mandate, store, item and action; the agent does the errand) ──
+    def _direct_form(self, qs):
+        gate = self._agents_gate()
+        if not gate:
+            return
+        session, claims = gate
+        csrf = session.setdefault("csrf", secrets.token_urlsafe(24))
+        flash = session.pop("aflash", None)
+        flash_html = (f'<div class="flash flash-{flash[0]}" role="status">{html.escape(flash[1])}</div>' if flash else "")
+        try:
+            agents = _agents_of(claims["sub"])
+            mandates = [m for m in _wallet_call("GET", "/mandates?sub=" + urllib.parse.quote(claims["sub"], safe=""))["mandates"] if m["status"] == "active"]
+            merchants = _wallet_call("GET", "/merchants")["merchants"]
+            with _runs_lock:
+                runs = sorted((r for r in _runs.values() if r["sub"] == claims["sub"]), key=lambda r: r["created"], reverse=True)[:5]
+            body = _direct_html(agents, mandates, merchants, csrf, flash_html, (qs.get("agent") or [""])[0], runs)
+        except Exception as ex:
+            body = f'<div class="flash flash-err" role="status">Wallet service unreachable: {html.escape(str(ex))}</div>'
+        _html(self, _agent_page(body, title="DIRECT", subtitle="Send an agent shopping"))
+
+    def _direct_start(self):
+        gate = self._agents_gate()
+        if not gate:
+            return
+        session, claims = gate
+        length = min(int(self.headers.get("Content-Length") or 0), 8192)
+        form = urllib.parse.parse_qs(self.rfile.read(length).decode("utf-8", "replace"))
+        one = lambda k: (form.get(k) or [""])[0].strip()
+        if not session.get("csrf") or not secrets.compare_digest(one("csrf").encode(), session["csrf"].encode()):
+            _html(self, "<h1>403</h1><p>This form expired. <a href='/agents/direct'>Reload the page</a> and try again.</p>", 403)
+            return
+        agent = _agent_owned(claims["sub"], one("agent"))
+        sku, store, mandate_id, pay = one("sku"), one("store"), one("mandate"), one("mode") == "pay"
+        back = "/agents/direct?agent=" + urllib.parse.quote(one("agent"), safe="")
+        err = None
+        try:
+            mandates = {m["id"]: m for m in _wallet_call("GET", "/mandates?sub=" + urllib.parse.quote(claims["sub"], safe=""))["mandates"]}
+            stores = {m["username"] for m in _wallet_call("GET", "/merchants")["merchants"]}
+        except Exception as ex:
+            mandates, stores, err = {}, set(), f"Wallet service unreachable: {ex}"
+        m = mandates.get(mandate_id)
+        if err:
+            pass
+        elif not agent:
+            err = "Choose one of your agents."
+        elif not m or m["agentId"] != agent["id"] or m["status"] != "active":
+            err = "Choose an active mandate that belongs to that agent."
+        elif store not in stores:
+            err = "Choose a store from the list."
+        elif not SKU_RE.fullmatch(sku):
+            err = "Item IDs look like VSE-010: letters, digits and dashes."
+        elif one("mode") not in ("quote", "pay"):
+            err = "Choose whether the agent should quote or pay."
+        if err:
+            session["aflash"] = ("err", err)
+            _redirect(self, back)
+            return
+        run = _start_run(claims["sub"], agent, mandate_id, store, sku, pay, _public_base(self))
+        if not run:
+            session["aflash"] = ("err", "Three errands are already running. Wait for one to finish.")
+            _redirect(self, back)
+            return
+        _redirect(self, f"/agents/run/{run['id']}")
+
+    def _run_page(self, path):
+        gate = self._agents_gate()
+        if not gate:
+            return
+        session, claims = gate
+        with _runs_lock:
+            run = _runs.get(path.rsplit("/", 1)[1])
+        if not run or run["sub"] != claims["sub"]:
+            _html(self, "<h1>404</h1><p>No such errand. <a href='/agents/direct'>Back</a></p>", 404)
+            return
+        _html(self, _agent_page(_run_html(run), title="ERRAND", subtitle="Your agent at work", back_href="/agents/direct", back_text="Back to Direct an agent"))
+
+    # ── /agents/<id>  (owner: identity, mandates, and the form to grant one) ──
+    def _agent_detail(self, path):
+        gate = self._agents_gate()
+        if not gate:
+            return
+        session, claims = gate
+        agent_id = path[len("/agents/"):]
+        agent = _agent_owned(claims["sub"], agent_id)
+        if not agent:
+            _html(self, "<h1>404</h1><p>No such agent. <a href='/agents'>Back</a></p>", 404)
+            return
+        csrf = session.setdefault("csrf", secrets.token_urlsafe(24))
+        flash = session.pop("aflash", None)
+        flash_html = (f'<div class="flash flash-{flash[0]}" role="status">{html.escape(flash[1])}</div>' if flash else "")
+        try:
+            mandates = [m for m in _wallet_call("GET", "/mandates?sub=" + urllib.parse.quote(claims["sub"], safe=""))["mandates"]
+                        if m.get("agentId") == agent_id]
+            merchants = _wallet_call("GET", "/merchants")["merchants"]
+            approvals = [a for a in _wallet_call("GET", "/approvals?sub=" + urllib.parse.quote(claims["sub"], safe=""))["approvals"]
+                         if a.get("agentId") == agent_id]
+            orders = [o for o in _wallet_call("GET", "/orders?sub=" + urllib.parse.quote(claims["sub"], safe=""))["orders"]
+                      if o.get("agentId") == agent_id]
+            body = _agent_detail_html(agent, mandates, merchants, csrf, flash_html, approvals, orders=orders)
+        except Exception as ex:
+            body = f'<div class="flash flash-err" role="status">Wallet service unreachable: {html.escape(str(ex))}</div>'
+        _html(self, _agent_page(body))
+
+    def _owner_post(self, path):
+        """Common checks for the agent POST forms. Returns (session, claims, agent, form, rest) or None."""
+        gate = self._agents_gate()
+        if not gate:
+            return None
+        session, claims = gate
+        agent = _agent_owned(claims["sub"], path.split("/")[2])
+        length = min(int(self.headers.get("Content-Length") or 0), 8192)
+        form = urllib.parse.parse_qs(self.rfile.read(length).decode("utf-8", "replace"))
+        token = form.get("csrf", [""])[0]
+        if not session.get("csrf") or not secrets.compare_digest(token.encode(), session["csrf"].encode()):
+            _html(self, "<h1>403</h1><p>This form expired. <a href='/agents'>Reload the page</a> and try again.</p>", 403)
+            return None
+        if not agent:
+            _html(self, "<h1>404</h1><p>No such agent. <a href='/agents'>Back</a></p>", 404)
+            return None
+        return session, claims, agent, form
+
+    # ── /approvals  (human-present stores ask the user to approve each exact cart) ──
+    def _approvals(self):
+        gate = self._agents_gate()
+        if not gate:
+            return
+        session, claims = gate
+        flash = session.pop("aflash", None)
+        flash_html = (f'<div class="flash flash-{flash[0]}" role="status">{html.escape(flash[1])}</div>' if flash else "")
+        try:
+            items = _wallet_call("GET", "/approvals?sub=" + urllib.parse.quote(claims["sub"], safe=""))["approvals"]
+        except Exception as ex:
+            items = None
+            flash_html += f'<div class="flash flash-err" role="status">Wallet service unreachable: {html.escape(str(ex))}</div>'
+        rows = "".join(
+            f'<tr><td class="mono"><a href="/approvals/{html.escape(a["id"], quote=True)}">{html.escape(a["id"])}</a></td>'
+            f'<td>{html.escape(a["businessName"])}</td><td>{html.escape(a.get("item") or a["sku"])}</td>'
+            f'<td>{html.escape(_ousd(a["amount"]))}</td><td>{html.escape(a["status"])}</td></tr>' for a in (items or []))
+        body = (flash_html + '<div class="divider">PURCHASE APPROVALS</div>'
+                '<p class="dim" style="margin-bottom:14px">Stores that require you to be present ask here before they quote a price. '
+                'Approve the exact cart with your passkey, or decline it.</p>'
+                '<table class="tbl"><thead><tr><th>Request</th><th>Store</th><th>Item</th><th>OUSD</th><th>Status</th></tr></thead><tbody>'
+                + (rows or "<tr><td colspan=5 class=empty>No approval requests yet.</td></tr>") + "</tbody></table>")
+        _html(self, _agent_page(body, title="APPROVALS", subtitle="Purchases waiting for you"))
+
+    def _approval_detail(self, path):
+        gate = self._agents_gate()
+        if not gate:
+            return
+        session, claims = gate
+        csrf = session.setdefault("csrf", secrets.token_urlsafe(24))
+        flash = session.pop("aflash", None)
+        flash_html = (f'<div class="flash flash-{flash[0]}" role="status">{html.escape(flash[1])}</div>' if flash else "")
+        try:
+            a = _wallet_call("GET", f"{path}?sub=" + urllib.parse.quote(claims["sub"], safe=""))
+        except urllib.error.HTTPError:
+            _html(self, "<h1>404</h1><p>No such approval request. <a href='/approvals'>Back</a></p>", 404)
+            return
+        except Exception as ex:
+            _html(self, f"<h1>Wallet service unreachable</h1><p>{html.escape(str(ex))}</p>", 503)
+            return
+        intro = ('<p class="dim" style="margin-bottom:14px">Your agent is trying to buy this at a store that requires you to approve each purchase. '
+                 'Check the details. Approving signs in again with your passkey and covers this exact item, price and agent, once.</p>')
+        _html(self, _agent_page(flash_html + '<div class="divider">APPROVE THIS PURCHASE?</div>' + intro + _approval_card(a, csrf),
+                                title="APPROVE", subtitle="Review this purchase", back_href="/approvals", back_text="Back to approvals"))
+
+    def _approval_decide(self, path):
+        gate = self._agents_gate()
+        if not gate:
+            return
+        session, claims = gate
+        _, _, apr_id, action = path.split("/")
+        length = min(int(self.headers.get("Content-Length") or 0), 8192)
+        form = urllib.parse.parse_qs(self.rfile.read(length).decode("utf-8", "replace"))
+        token = form.get("csrf", [""])[0]
+        if not session.get("csrf") or not secrets.compare_digest(token.encode(), session["csrf"].encode()):
+            _html(self, "<h1>403</h1><p>This form expired. <a href='/approvals'>Reload the page</a> and try again.</p>", 403)
+            return
+        back = f"/approvals/{apr_id}"
+        if action == "approve":
+            now = time.time()
+            for k in [k for k, v in _pending_mandates.items() if now - v["created"] > 300]:
+                del _pending_mandates[k]
+            tok = secrets.token_urlsafe(24)
+            _pending_mandates[tok] = {"kind": "approval", "sub": claims["sub"], "approval_id": apr_id, "created": now}
+            self._login(extra={"prompt": "login", "max_age": "0", "login_hint": claims.get("preferred_username", "")}, mandate=tok)
+            return
+        try:
+            _wallet_call("POST", f"/approvals/{apr_id}/reject", {"sub": claims["sub"]}, timeout=15)
+            session["aflash"] = ("ok", "Declined. The store will refuse this purchase.")
+        except urllib.error.HTTPError as e:
+            try:
+                msg = json.loads(e.read()).get("error") or f"error {e.code}"
+            except Exception:
+                msg = f"error {e.code}"
+            session["aflash"] = ("err", f"Could not decline: {msg}")
+        except Exception as ex:
+            session["aflash"] = ("err", f"Wallet service unreachable: {ex}")
+        _redirect(self, back)
+
+    def _mandate_create(self, path):
+        got = self._owner_post(path)
+        if not got:
+            return
+        session, claims, agent, form = got
+        back = f"/agents/{agent['id']}"
+        merchants = form.get("merchants", [])
+        max_pp = form.get("maxPerPurchase", [""])[0].strip()
+        budget = form.get("budget", [""])[0].strip()
+        try:
+            hours = int(form.get("hours", ["0"])[0])
+        except ValueError:
+            hours = 0
+        known = set()
+        try:
+            known = {m["username"] for m in _wallet_call("GET", "/merchants")["merchants"]}
+        except Exception:
+            pass
+        if not merchants or not set(merchants) <= known:
+            session["aflash"] = ("err", "Choose at least one store from the list.")
+        elif not AMOUNT_RE.fullmatch(max_pp) or not AMOUNT_RE.fullmatch(budget) or Decimal(max_pp) <= 0 or Decimal(budget) <= 0:
+            session["aflash"] = ("err", "Limits must be amounts above zero with at most 6 decimals.")
+        elif Decimal(max_pp) > Decimal(budget):
+            session["aflash"] = ("err", "The per-purchase limit can’t be more than the total budget.")
+        elif hours not in MANDATE_HOURS:
+            session["aflash"] = ("err", "Choose how long the mandate stays valid.")
+        else:
+            now = time.time()
+            for k in [k for k, v in _pending_mandates.items() if now - v["created"] > 300]:
+                del _pending_mandates[k]
+            token = secrets.token_urlsafe(24)
+            _pending_mandates[token] = {"sub": claims["sub"], "agent_id": agent["id"], "created": now,
+                                        "params": {"merchants": merchants, "maxPerPurchase": max_pp, "budget": budget, "hours": hours}}
+            # Force a fresh passkey sign-in: this is the "trusted surface" moment that authorizes the signature.
+            self._login(extra={"prompt": "login", "max_age": "0", "login_hint": claims.get("preferred_username", "")}, mandate=token)
+            return
+        _redirect(self, back)
+
+    def _mandate_revoke(self, path):
+        got = self._owner_post(path)
+        if not got:
+            return
+        session, claims, agent, form = got
+        mandate_id = path.split("/")[4]
+        try:
+            _wallet_call("POST", f"/mandates/{mandate_id}/revoke", {"sub": claims["sub"]}, timeout=15)
+            session["aflash"] = ("ok", f"Mandate {mandate_id} revoked. Stores will refuse it from now on.")
+        except Exception as ex:
+            session["aflash"] = ("err", f"Could not revoke: {ex}")
+        _redirect(self, f"/agents/{agent['id']}")
 
     def _agents_create(self):
         gate = self._agents_gate()
@@ -576,6 +1657,38 @@ class DemoHandler(http.server.BaseHTTPRequestHandler):
                 session["tflash"] = ("err", f"Wallet service unreachable: {html.escape(str(e))}")
         _redirect(self, "/treasury")
 
+    # ── POST /treasury/register-merchant  (admin: register a merchant with Visa's sandbox) ─
+    def _merchant_register(self):
+        session = _sessions.get(_get_sid(self)) or {}
+        claims = session.get("claims")
+        if not claims:
+            _redirect(self, "/")
+            return
+        if "admin" not in (claims.get("roles") or []):
+            _html(self, "<h1>403</h1><p>Administrators only. <a href='/'>Back</a></p>", 403)
+            return
+        length = min(int(self.headers.get("Content-Length") or 0), 4096)
+        form = urllib.parse.parse_qs(self.rfile.read(length).decode("utf-8", "replace"))
+        token = form.get("csrf", [""])[0]
+        if not session.get("csrf") or not secrets.compare_digest(token.encode(), session["csrf"].encode()):
+            _html(self, "<h1>403</h1><p>This form expired. <a href='/treasury'>Reload the page</a> and try again.</p>", 403)
+            return
+        sub = form.get("sub", [""])[0]
+        try:
+            out = _wallet_call("POST", "/merchants/register-visa", {"sub": sub, "baseUrl": _public_base(self)}, timeout=120)
+            mid = ((out.get("visa") or {}).get("merchantId") or "")[:8]
+            note = "was already registered" if out.get("already") else "registered with Visa’s sandbox"
+            session["tflash"] = ("ok", f"Merchant {note} (merchant ID {html.escape(mid)}…).")
+        except urllib.error.HTTPError as e:
+            try:
+                msg = json.loads(e.read()).get("error") or f"error {e.code}"
+            except Exception:
+                msg = f"error {e.code}"
+            session["tflash"] = ("err", f"Could not register the merchant: {html.escape(msg)}")
+        except Exception as e:
+            session["tflash"] = ("err", f"Wallet service unreachable: {html.escape(str(e))}")
+        _redirect(self, "/treasury")
+
     # ── /treasury  (treasury + user wallets; "admin" realm role only) ─────────
     def _admin(self):
         session = _sessions.get(_get_sid(self)) or {}
@@ -592,7 +1705,7 @@ class DemoHandler(http.server.BaseHTTPRequestHandler):
         try:
             treasury = _wallet_call("GET", "/treasury")
             wallets = _wallet_call("GET", "/wallets")["wallets"]
-            content = _admin_html(treasury, wallets, csrf, flash_html)
+            content = _admin_html(treasury, wallets, csrf, flash_html, _public_base(self))
         except Exception as e:
             content = ('<div class="flash flash-err" role="status">Wallet service unreachable: '
                        f"{html.escape(str(e))}</div>")
@@ -719,13 +1832,13 @@ class DemoHandler(http.server.BaseHTTPRequestHandler):
             _json(self, {"status": "expired", "error": err})
 
     # ── /login/browser  (classic OIDC + PKCE in this browser) ─────────────────
-    def _login(self, endpoint=AUTH_ENDPOINT, extra=None, enroll=None):
+    def _login(self, endpoint=AUTH_ENDPOINT, extra=None, enroll=None, mandate=None):
         sid = secrets.token_urlsafe(16)
         verifier, challenge = _pkce_pair()
         state = secrets.token_urlsafe(16)
         redirect_uri = _base_url(self) + "/callback"
         _sessions[sid] = {"state": state, "code_verifier": verifier,
-                          "redirect_uri": redirect_uri, "enroll": enroll,
+                          "redirect_uri": redirect_uri, "enroll": enroll, "mandate": mandate,
                           "action": (extra or {}).get("kc_action")}
         params = urllib.parse.urlencode({
             **(extra or {}),
@@ -786,8 +1899,11 @@ class DemoHandler(http.server.BaseHTTPRequestHandler):
         if messages:
             status = qs.get("kc_action_status", [""])[0]
             new_session["flash"] = messages.get(status, messages["error"])
+        back = "/"
+        if session.get("mandate"):
+            new_session["aflash"], back = _finish_mandate_stepup(new_session["claims"], session["mandate"], id_token)
         _sessions[sid] = new_session
-        _redirect(self, "/")
+        _redirect(self, back)
 
     # ── /passkey/add  (signed-in computer shows a QR for the phone) ──────────
     def _passkey_add(self):

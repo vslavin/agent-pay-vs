@@ -36,6 +36,7 @@
 
     <div class="btn-row" style="margin-top:28px">
       <a class="btn btn-secondary" href="/treasury">Refresh</a>
+      <a class="btn btn-secondary" href="/treasury/agents">All agents</a>
       <a class="btn btn-secondary" href="/">Back</a>
     </div>
 
@@ -54,6 +55,12 @@
     f.querySelector('button').disabled = true;
   });
 }());
+document.querySelectorAll('form[data-confirm]').forEach(function (form) {
+  form.addEventListener('submit', function (e) {
+    if (!confirm(form.dataset.confirm)) { e.preventDefault(); return; }
+    form.querySelector('button').disabled = true;
+  });
+});
 </script>
 
 </body>
