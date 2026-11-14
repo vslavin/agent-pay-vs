@@ -5,8 +5,10 @@ import { createPublicClient, createWalletClient, http as rpcHttp, defineChain, f
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts'
 import { generateAgentKey, signRequest, TAGS } from './tap.mjs'
 import { registerMerchantWithVisa, VisaRegistrationError, sandboxVmid, summarizeVisaMerchant, detail as visaDetail } from './visa-merchant.mjs'
-import { generateUserKey, createOpenMandate, createClosedMandate, evaluateCheckout, decodeJws, toMicro, fromMicro, createMandateReceipt, createPaymentReceipt, mandateErrorCode } from './mandate.mjs'
+import { generateUserKey, createOpenMandate, createClosedMandate, evaluateCheckout, decodeJws, verifyJws, toMicro, fromMicro, createMandateReceipt, createPaymentReceipt, mandateErrorCode, MANDATE_RECEIPT_TYP, PAYMENT_RECEIPT_TYP } from './mandate.mjs'
 import { MEMO_TOPIC, MAX_MEMO_BYTES, findPayment } from './payment.mjs'
+import { verifyIdToken } from './oidc.mjs'
+import { mandateTerms, approvalTerms, termsHash, AUTH_FRESH_SECONDS, EVIDENCE_VERSION } from './evidence.mjs'
 import { thumbprint } from './tap.mjs'
 import { pathToFileURL } from 'node:url'
 import { resolve } from 'node:path'
@@ -306,6 +308,39 @@ function sendFromTreasury(sub, amount, memoText) {
 }
 
 
+// ── Proof that the user signed in: Keycloak's own signature, not the app's word ────────────────────────────────
+// Granting a mandate or approving a cart requires an ID token from a sign-in that happened just now, whose `nonce`
+// is a hash of the exact terms. We check Keycloak's signature on it. A stolen service token alone cannot mint either.
+// WALLET_DEV_UNPROVEN=1 switches this off for test tooling (scenarios.mjs); such records are marked as unproven.
+const KC_LOCAL = (process.env.KC_LOCAL_URL || 'http://localhost:8080').replace(/\/$/, '')
+const KC_REALM = process.env.KC_REALM || 'passkey-demo'
+const KC_CLIENT = process.env.KC_CLIENT_ID || 'demo-app'
+const DEV_UNPROVEN = process.env.WALLET_DEV_UNPROVEN === '1'
+if (DEV_UNPROVEN) console.warn('WARNING: WALLET_DEV_UNPROVEN=1. Mandates and approvals are accepted WITHOUT a Keycloak sign-in proof. For test tooling only.')
+
+let oidcCache = null
+async function oidcKeys(force = false) {
+  if (!force && oidcCache && Date.now() - oidcCache.at < 600_000) return oidcCache
+  const base = `${KC_LOCAL}/realms/${KC_REALM}`
+  const jwks = await (await fetch(`${base}/protocol/openid-connect/certs`, { signal: AbortSignal.timeout(8000) })).json()
+  const issuer = process.env.KC_ISSUER || (await (await fetch(`${base}/.well-known/openid-configuration`, { signal: AbortSignal.timeout(8000) })).json()).issuer
+  return (oidcCache = { issuer, jwks, at: Date.now() })
+}
+async function verifyProof(idToken, { sub, nonce }) {
+  let cfg
+  try { cfg = await oidcKeys() } catch { return { ok: false, status: 503, error: 'Cannot reach Keycloak to verify your sign-in.' } }
+  const check = () => verifyIdToken(idToken, { jwks: cfg.jwks, issuer: cfg.issuer, audience: KC_CLIENT })
+  let r = check()
+  if (!r.ok && r.reason === 'unknown signing key') { try { cfg = await oidcKeys(true); r = check() } catch {} }   // keys may have rotated
+  if (!r.ok) return { ok: false, status: 400, error: `Your sign-in proof was refused: ${r.reason}.` }
+  const c = r.claims
+  if (c.sub !== sub) return { ok: false, status: 400, error: 'That sign-in belongs to a different account.' }
+  if (c.nonce !== nonce) return { ok: false, status: 400, error: 'That sign-in was not for these exact terms.' }
+  const age = Math.floor(Date.now() / 1000) - Number(c.auth_time)
+  if (!Number.isFinite(age) || age < -30 || age > AUTH_FRESH_SECONDS) return { ok: false, status: 400, error: 'A fresh sign-in is required: yours is too old.' }
+  return { ok: true, proof: { idToken, verifiedAt: new Date().toISOString() } }
+}
+
 // ── Mandates, orders and the verifying checkout ────────────────────────────────
 const userKeys = readJson('user-keys.json', {})
 const mandateStore = readJson('mandates.json', {})
@@ -352,7 +387,7 @@ function mandateView(rec, { withJws = false } = {}) {
   }
 }
 
-function createMandate({ sub, agentId, merchants, maxPerPurchase, budget, hours }) {
+async function createMandate({ sub, agentId, merchants, maxPerPurchase, budget, hours, proof }) {
   const agent = agentKeys[agentId]
   if (!agent) return { status: 404, body: { error: 'No such agent.' } }
   const known = new Set(merchantsList().map((m) => m.username))
@@ -361,10 +396,17 @@ function createMandate({ sub, agentId, merchants, maxPerPurchase, budget, hours 
   if (!max || !total || max <= 0n || total <= 0n) return { status: 400, body: { error: 'Limits must be positive amounts with at most 6 decimals.' } }
   if (max > total) return { status: 400, body: { error: 'The per-purchase limit cannot be more than the total budget.' } }
   if (!Number.isInteger(hours) || hours < 1 || hours > 720) return { status: 400, body: { error: 'Choose a duration between 1 hour and 30 days.' } }
+  const terms = mandateTerms({ sub, agentId, merchants, maxPerPurchase, budget, hours })
+  let kept = { mode: 'dev-unproven' }
+  if (!DEV_UNPROVEN) {
+    const v = await verifyProof(proof?.idToken, { sub, nonce: termsHash(terms) })
+    if (!v.ok) return { status: v.status, body: { error: v.error } }
+    kept = v.proof
+  }
   const constraints = { merchants, maxPerPurchase, budget, currency: 'OUSD' }
   const merchantNames = Object.fromEntries(merchants.map((u) => [u, merchantByUsername(u)?.businessName || u]))
   const open = createOpenMandate({ user: ensureUserKey(sub), userSub: sub, agent: { id: agentId, publicJwk: agent.publicJwk }, constraints: { ...constraints, merchantNames }, ttlSeconds: hours * 3600 })
-  mandateStore[open.id] = { id: open.id, sub, agentId, constraints, jws: open.jws, exp: open.payload.exp, createdAt: new Date().toISOString(), status: 'active' }
+  mandateStore[open.id] = { id: open.id, sub, agentId, constraints, jws: open.jws, exp: open.payload.exp, createdAt: new Date().toISOString(), status: 'active', proof: kept }
   writeJson('mandates.json', mandateStore)
   return { status: 200, body: mandateView(mandateStore[open.id]) }
 }
@@ -375,15 +417,23 @@ function approvalView(a) {
   const status = a.status === 'pending' && Date.now() >= Date.parse(a.expiresAt) ? 'expired' : a.status
   return { id: a.id, status, agentId: a.agentId, agentName: agentKeys[a.agentId]?.name ?? a.agentId, merchant: a.merchant,
     businessName: wallets && Object.values(wallets).find((w) => w.username === a.merchant)?.businessName || a.merchant,
-    sku: a.sku, item: a.item, amount: a.amount, currency: a.currency, mandateId: a.mandateId,
+    sku: a.sku, item: a.item, amount: a.amount, currency: a.currency, mandateId: a.mandateId, orderHash: a.orderHash,
     createdAt: a.createdAt, expiresAt: a.expiresAt, decidedAt: a.decidedAt ?? null }
 }
 const approvalLive = (a) => Date.now() < Date.parse(a.expiresAt)
+// An approval is spent when the purchase is PAID, not when it is quoted. While a quote is open it is reserved for that
+// order, so one approval can never buy twice; if the quote expires or the payment fails it is free again until it lapses.
+const holdsLiveQuote = (a) => { const o = a.orderId && orderStore[a.orderId]; return Boolean(o) && ['payment_required', 'paying'].includes(orderStatus(o)) }
 function approvalFor(hash, mandateId) {
   const candidates = Object.values(approvalStore)
     .filter((a) => a.orderHash === hash && a.mandateId === mandateId && approvalLive(a) && a.status !== 'used')
     .sort((x, y) => y.createdAt.localeCompare(x.createdAt))
-  return candidates.find((a) => a.status === 'approved') ?? candidates[0] ?? null
+  const approved = candidates.filter((a) => a.status === 'approved')
+  const free = approved.find((a) => !holdsLiveQuote(a))
+  if (free) return free
+  const held = approved.find(holdsLiveQuote)
+  if (held) return { ...held, status: 'reserved' }
+  return candidates[0] ?? null
 }
 function openApproval({ mandateId, order, orderHash: hash, merchant, item }) {
   const rec = mandateStore[mandateId]
@@ -395,15 +445,23 @@ function openApproval({ mandateId, order, orderHash: hash, merchant, item }) {
   writeJson('approvals.json', approvalStore)
   return approvalStore[id]
 }
-function decideApproval(id, { sub, decision, authTime }) {
+async function decideApproval(id, { sub, decision, authTime, idToken }) {
   const a = approvalStore[id]
   if (!a || a.sub !== sub) return { status: 404, body: { error: 'No such approval request.' } }
   const view = approvalView(a)
   if (view.status !== 'pending') return { status: 409, body: { error: `This request is ${view.status}.` } }
   if (decision === 'approve') {
-    const age = Math.floor(Date.now() / 1000) - Number(authTime)
-    if (!Number.isFinite(age) || age < -30 || age > 120) return { status: 400, body: { error: 'A fresh passkey sign-in is required to approve.' } }
-    a.status = 'approved'; a.authTime = Number(authTime)
+    if (DEV_UNPROVEN) {
+      const age = Math.floor(Date.now() / 1000) - Number(authTime)
+      if (!Number.isFinite(age) || age < -30 || age > AUTH_FRESH_SECONDS) return { status: 400, body: { error: 'A fresh passkey sign-in is required to approve.' } }
+      a.proof = { mode: 'dev-unproven' }
+    } else {
+      const v = await verifyProof(idToken, { sub, nonce: termsHash(approvalTerms({ approvalId: a.id, orderHash: a.orderHash, mandateId: a.mandateId })) })
+      if (!v.ok) return { status: v.status, body: { error: v.error } }
+      a.proof = v.proof
+    }
+    a.status = 'approved'
+    a.expiresAt = new Date(Date.now() + APPROVAL_TTL_MS).toISOString()   // valid for a while after you approve, so a retry needs no new approval
   } else { a.status = 'rejected' }
   a.decidedAt = new Date().toISOString()
   writeJson('approvals.json', approvalStore)
@@ -445,13 +503,14 @@ function verifyCheckout(username, input) {
     if (result.context.needsApproval) approval = openApproval({ mandateId: result.context.mandateId, order, orderHash: result.context.orderHash, merchant: m.username, item: meta?.name })
     return { status: 200, body: { ...body, httpStatus: result.status, ...(approval ? { approval: approvalView(approval) } : {}) } }
   }
-  if (result.context.approvalId) { approvalStore[result.context.approvalId].status = 'used'; writeJson('approvals.json', approvalStore) }
   const id = `ord_${randomBytes(6).toString('hex')}`
+  if (result.context.approvalId) { approvalStore[result.context.approvalId].orderId = id; writeJson('approvals.json', approvalStore) }   // reserved until paid
   const created = Date.now()
   orderStore[id] = { id, sub: mandateStore[result.context.mandateId].sub, mandateId: result.context.mandateId, agentId: result.context.agentId, merchant: m.username,
     sku: order.sku, item: String(meta?.name ?? order.sku).slice(0, 80), amount: order.amount, currency: 'OUSD', status: 'payment_required',
     createdAt: new Date(created).toISOString(), expiresAt: new Date(created + QUOTE_TTL_MS).toISOString(), issuer: iss,
-    closedId: result.context.closedId, closedNonce: result.context.closedNonce, closedHash: result.context.closedHash, approvalId: result.context.approvalId ?? null, mandateReceipt }
+    closedId: result.context.closedId, closedNonce: result.context.closedNonce, closedHash: result.context.closedHash, approvalId: result.context.approvalId ?? null, mandateReceipt,
+    closedJws: mandates.closed, request: { authority: request.authority, path: request.path, headers: { 'signature-input': request.headers['signature-input'] ?? request.headers['Signature-Input'], signature: request.headers.signature ?? request.headers.Signature } } }
   usedClosed.add(result.context.closedId); usedClosed.add(`n:${result.context.closedNonce}`)
   writeJson('orders.json', orderStore)
   return { status: 200, body: { ...body, httpStatus: 402, orderId: id, payment: { payTo: m.address, amount: order.amount, currency: 'OUSD', network: 'Tempo testnet', reference: id, memo: id, expiresAt: orderStore[id].expiresAt } } }
@@ -460,9 +519,12 @@ function verifyCheckout(username, input) {
 // ── Payment: the user's wallet pays against a valid order; the store confirms it on-chain and signs a receipt. ──
 const businessOf = (username) => merchantsList().find((x) => x.username === username)?.businessName ?? username
 function orderView(o) {
+  // Whether each receipt's signature checks out against the store's key: true, false, or null when there is no such receipt.
+  const verified = (jws, typ) => (jws ? verifyJws(jws, receiptKeyFor(o.merchant).publicJwk, typ).ok : null)
   return { id: o.id, status: orderStatus(o), agentId: o.agentId, agentName: agentKeys[o.agentId]?.name ?? o.agentId, merchant: o.merchant, businessName: businessOf(o.merchant),
     sku: o.sku, item: o.item ?? o.sku, amount: o.amount, currency: o.currency, mandateId: o.mandateId, createdAt: o.createdAt, expiresAt: o.expiresAt,
-    txHash: o.txHash ?? null, paidAt: o.paidAt ?? null, error: o.error ?? null,
+    txHash: o.txHash ?? null, blockNumber: o.blockNumber ?? null, paidAt: o.paidAt ?? null, error: o.error ?? null, approved: Boolean(o.approvalId),
+    verified: { mandate: verified(o.mandateReceipt, MANDATE_RECEIPT_TYP), payment: verified(o.paymentReceipt, PAYMENT_RECEIPT_TYP) },
     receipts: { ...(o.mandateReceipt ? { mandate: o.mandateReceipt } : {}), ...(o.paymentReceipt ? { payment: o.paymentReceipt } : {}) } }
 }
 
@@ -488,10 +550,40 @@ async function confirmPayment(orderId, txHash, merchantUsername) {
   const found = findPayment({ logs: receipt.logs, token: OUSD, payer: payer?.address, payee: merchant?.address, amountMicro: toMicro(o.amount), memo: o.id })
   if (!found.ok) return { status: 400, body: { error: `That transaction does not pay this order: ${found.reason}.` } }
   o.status = 'paid'; o.txHash = txHash; o.paidAt = new Date().toISOString(); delete o.error
+  o.blockNumber = Number(receipt.blockNumber); o.payer = payer.address; o.payee = merchant.address
+  if (o.approvalId && approvalStore[o.approvalId]) { approvalStore[o.approvalId].status = 'used'; writeJson('approvals.json', approvalStore) }   // now it is spent
   o.paymentReceipt = createPaymentReceipt({ issuer: o.issuer, key, reference: o.closedHash, paymentId: o.id, txHash }).jws
   writeJson('orders.json', orderStore)
   return { status: 200, body: orderView(o) }
 }
+
+// Everything a third party needs to check one purchase, with no access to our database.
+async function buildEvidence(o) {
+  const rec = mandateStore[o.mandateId]
+  const ap = o.approvalId ? approvalStore[o.approvalId] : null
+  const uk = userKeys[o.sub]
+  const sk = receiptKeyFor(o.merchant)
+  const agent = agentKeys[o.agentId]
+  let oidc = null
+  try { const c = await oidcKeys(); oidc = { issuer: c.issuer, audience: KC_CLIENT, jwks: c.jwks } } catch {}
+  return {
+    version: EVIDENCE_VERSION, generatedAt: new Date().toISOString(),
+    order: { id: o.id, merchant: o.merchant, sku: o.sku, item: o.item, amount: o.amount, currency: o.currency, quantity: 1, status: orderStatus(o), createdAt: o.createdAt, paidAt: o.paidAt ?? null, txHash: o.txHash ?? null },
+    mandates: { open: rec?.jws ?? null, closed: o.closedJws ?? null },
+    request: o.request ?? null,
+    receipts: { mandate: o.mandateReceipt ?? null, payment: o.paymentReceipt ?? null },
+    grant: { proof: rec?.proof ? (rec.proof.idToken ? { idToken: rec.proof.idToken } : { mode: rec.proof.mode }) : null },
+    approval: ap ? { id: ap.id, createdAt: ap.createdAt, decidedAt: ap.decidedAt ?? null, proof: ap.proof?.idToken ? { idToken: ap.proof.idToken } : ap.proof ?? null } : null,
+    chain: { network: 'Tempo testnet (Moderato)', chainId: chain.id, rpc: RPC, token: OUSD, payer: o.payer ?? wallets[o.sub]?.address ?? null, payee: o.payee ?? merchantByUsername(o.merchant)?.address ?? null, txHash: o.txHash ?? null, blockNumber: o.blockNumber ?? null },
+    keys: { user: { sub: o.sub, jwk: uk?.publicJwk ?? null }, agent: { id: o.agentId, kid: agent?.keyid ?? null, jwk: agent?.publicJwk ?? null }, store: { username: o.merchant, kid: sk.kid, jwk: sk.publicJwk }, oidc },
+  }
+}
+
+// What a store may show the public: paid orders only, no names of users or agents.
+const publicHistory = (username) => Object.values(orderStore)
+  .filter((o) => o.merchant.toLowerCase() === String(username).toLowerCase() && o.status === 'paid')
+  .sort((a, b) => String(b.paidAt).localeCompare(String(a.paidAt))).slice(0, 25)
+  .map((o) => ({ id: o.id, item: o.item ?? o.sku, sku: o.sku, amount: o.amount, currency: o.currency, txHash: o.txHash, paidAt: o.paidAt }))
 
 // The wallet's side: the agent asks to pay a quoted order. Refused unless the quote is live and the mandate still holds.
 async function payOrder(agentId, orderId) {
@@ -512,17 +604,33 @@ async function payOrder(agentId, orderId) {
   try {
     hash = await enqueue(async () => {
       const bal = await pub.readContract({ address: OUSD, abi, functionName: 'balanceOf', args: [w.address] })
-      if (bal < amount) throw Object.assign(new Error('Insufficient balance in the user’s wallet.'), { userFacing: true })
+      const floorCents = (m) => fromMicro(m - (m % 10_000n))   // never state a balance as more than the wallet holds
+      if (bal < amount) throw Object.assign(new Error(`Insufficient balance: the wallet holds ${floorCents(bal)} OUSD and this costs ${o.amount} OUSD.`), { userFacing: true })
       const client = createWalletClient({ account: privateKeyToAccount(w.privateKey), chain, transport: rpcHttp(RPC) })
       return client.writeContract({ address: OUSD, abi, functionName: 'transferWithMemo', args: [merchant.address, amount, stringToHex(o.id, { size: MAX_MEMO_BYTES })] })
     })
   } catch (e) {
+    if (e.userFacing) {
+      // The buyer cannot cover it: cancel the quote (it stops counting against the budget) and record the failure in a signed
+      // receipt. The approval is kept, so the agent can be sent again without asking the buyer for a new one.
+      o.status = 'failed'; o.error = e.message
+      o.paymentReceipt = createPaymentReceipt({ issuer: o.issuer, key: receiptKeyFor(o.merchant), reference: o.closedHash, paymentId: o.id, error: 'insufficient_funds', description: e.message }).jws
+      writeJson('orders.json', orderStore)
+      return { status: 400, body: { error: e.message, ...orderView(o) } }
+    }
     o.status = 'payment_required'; writeJson('orders.json', orderStore)   // nothing was sent: the quote stays payable until it expires
-    return { status: e.userFacing ? 400 : 502, body: { error: e.userFacing ? e.message : String(e.shortMessage || e.message).slice(0, 200) } }
+    return { status: 502, body: { error: String(e.shortMessage || e.message).slice(0, 200) } }
   }
   o.txHash = hash; writeJson('orders.json', orderStore)                   // remember it before waiting, so a restart can finish the job
   const out = await confirmPayment(o.id, hash, o.merchant)
   return out.status === 200 ? out : { status: 502, body: { ...out.body, txHash: hash, note: 'The transfer was sent; confirmation will be retried.' } }
+}
+
+// Older records marked an approval spent as soon as it was quoted. If that purchase was never paid, give the approval back.
+for (const a of Object.values(approvalStore)) {
+  if (a.status !== 'used') continue
+  const o = Object.values(orderStore).find((x) => x.approvalId === a.id)
+  if (o && o.status !== 'paid') { a.status = 'approved'; a.orderId = o.id; writeJson('approvals.json', approvalStore) }
 }
 
 // After a restart, finish any order that was mid-payment.
@@ -550,7 +658,7 @@ const send = (res, status, body) => {
 const readBody = (req) =>
   new Promise((resolve, reject) => {
     let data = ''
-    req.on('data', (c) => { data += c; if (data.length > 10_000) reject(new Error('body too large')) })
+    req.on('data', (c) => { data += c; if (data.length > 40_000) reject(new Error('body too large')) })
     req.on('end', () => resolve(data))
   })
 
@@ -585,12 +693,12 @@ http.createServer(async (req, res) => {
       return send(res, 200, approvalView(a))
     }
     if (approval && approval[2] && req.method === 'POST') {
-      const { sub, authTime } = JSON.parse((await readBody(req)) || '{}')
-      const out = decideApproval(approval[1], { sub, decision: approval[2], authTime })
+      const { sub, authTime, idToken } = JSON.parse((await readBody(req)) || '{}')
+      const out = await decideApproval(approval[1], { sub, decision: approval[2], authTime, idToken })
       return send(res, out.status, out.body)
     }
     if (req.method === 'POST' && url.pathname === '/mandates') {
-      const out = createMandate(JSON.parse((await readBody(req)) || '{}'))
+      const out = await createMandate(JSON.parse((await readBody(req)) || '{}'))
       return send(res, out.status, out.body)
     }
     const revoke = req.method === 'POST' && url.pathname.match(/^\/mandates\/(mnd_[0-9a-f]{12})\/revoke$/)
@@ -622,6 +730,13 @@ http.createServer(async (req, res) => {
       if (!sub) return send(res, 400, { error: 'sub required' })
       return send(res, 200, { orders: Object.values(orderStore).filter((o) => o.sub === sub).sort((a, b) => b.createdAt.localeCompare(a.createdAt)).map(orderView) })
     }
+    const evidence = req.method === 'GET' && url.pathname.match(/^\/orders\/(ord_[0-9a-f]{12})\/evidence$/)
+    if (evidence) {
+      const o = orderStore[evidence[1]]
+      return o ? send(res, 200, await buildEvidence(o)) : send(res, 404, { error: 'No such order.' })
+    }
+    const history = req.method === 'GET' && url.pathname.match(/^\/merchants\/([^/]+)\/orders$/)
+    if (history) return send(res, 200, { orders: publicHistory(decodeURIComponent(history[1])) })
     const orderOne = req.method === 'GET' && url.pathname.match(/^\/orders\/(ord_[0-9a-f]{12})$/)
     if (orderOne) {
       const o = orderStore[orderOne[1]]

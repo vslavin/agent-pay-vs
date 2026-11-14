@@ -11,6 +11,7 @@ import html
 import json
 import pathlib
 import urllib.parse
+from datetime import datetime
 
 STORES_FILE = pathlib.Path(__file__).parent / "data" / "stores.json"
 
@@ -160,7 +161,29 @@ def catalog(m, store_url):
     }
 
 
-def render(m, store_url):
+def _when(iso):
+    try:
+        return datetime.fromisoformat(str(iso).replace("Z", "+00:00")).strftime("%b %d, %H:%M UTC")
+    except Exception:
+        return "—"
+
+
+def history_html(orders, store_url):
+    """Public purchase history: paid orders only, with no user or agent names."""
+    e = html.escape
+    if orders is None:
+        return '<p class="muted">The purchase history is unavailable right now.</p>'
+    if not orders:
+        return '<p class="muted">No purchases yet. The first one will show up here.</p>'
+    rows = "".join(
+        f'<tr><td>{e(_when(o["paidAt"]))}</td><td>{e(o["item"])} <small>{e(o["sku"])}</small></td><td>{e(o["amount"])} OUSD</td>'
+        f'<td><a href="{EXPLORER}/tx/{e(o["txHash"], quote=True)}" target="_blank" rel="noopener">{e(o["txHash"][:10])}…</a></td>'
+        f'<td><a href="/receipt/{e(o["id"], quote=True)}">view receipt</a></td></tr>' for o in orders)
+    return ('<div class="table-wrap"><table class="history-table"><thead><tr><th>Paid</th><th>Item</th><th>Amount</th><th>Payment</th><th>Receipts</th></tr></thead>'
+            f'<tbody>{rows}</tbody></table></div>')
+
+
+def render(m, store_url, history=None):
     e = html.escape
     brand = m["businessName"] or m["username"]
     prof = profile(m["username"])
@@ -200,7 +223,7 @@ def render(m, store_url):
     text = TEMPLATE.read_text()
     for key, value in {
         "TITLE": e(f"{brand} — {prof['noun']}"), "NOUN": e(prof["noun"]), "THEME": prof["theme"], "COLORWAYS": e(prof["colorways"]),
-        "POLICY_NOTE": e(prof["note"]), "MODE_PILL": ("Autonomous purchases" if prof["mode"] == "autonomous" else "Human approval required"), "BRAND": e(brand), "TAGLINE": e(tagline), "BIG": big,
+        "HISTORY": history_html(history, store_url), "POLICY_NOTE": e(prof["note"]), "MODE_PILL": ("Autonomous purchases" if prof["mode"] == "autonomous" else "Human approval required"), "BRAND": e(brand), "TAGLINE": e(tagline), "BIG": big,
         "VISA_BADGE": visa_badge, "HERO_SHOE": art(m["username"], hero["upper"], hero["accent"], hero["sole"]),
         "TICKER": e(ticker), "RACK": rack, "PRODUCTS": "".join(cards), "COUNT": str(len(items)),
         "CATALOG_URL": e(store_url + "/catalog.json", quote=True), "STORE_URL": e(store_url),

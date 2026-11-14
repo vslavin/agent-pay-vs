@@ -134,7 +134,7 @@ export function mandateErrorCode(check, detail = '') {
 //   agentPublicJwk(keyid) -> jwk|null,  userPublicJwk(sub) -> jwk|null,
 //   mandateRecord(jti) -> { status } | null,  spentMicro(jti) -> BigInt,
 //   seenNonces: Map (TAP request nonces),  usedClosed: Set (closed mandate nonces),
-//   approvalFor(orderHash, mandateId) -> { id, status: pending|approved|rejected } | null  (human-present stores only)
+//   approvalFor(orderHash, mandateId) -> { id, status: pending|approved|reserved|rejected, orderId? } | null  (human-present stores only)
 // }
 // Returns { ok, status, code, checks, context }. status is the HTTP-style class: 401 identity, 403 mandate.
 export function evaluateCheckout({ now = Date.now(), request, order, mandates, merchant, policy = { mode: 'autonomous' }, lookups }) {
@@ -237,6 +237,9 @@ export function evaluateCheckout({ now = Date.now(), request, order, mandates, m
       pass('purchase_mode', `the user approved this exact purchase (${ap.id}) with a fresh passkey sign-in`)
     } else if (ap?.status === 'rejected') {
       return fail('purchase_mode', 403, `the user declined this purchase (${ap.id})`)
+    } else if (ap?.status === 'reserved') {
+      context.approvalId = ap.id
+      return fail('purchase_mode', 403, `this approved purchase already has an open quote (${ap.orderId}): pay it, or wait for it to expire and ask again`)
     } else if (ap?.status === 'pending') {
       context.approvalId = ap.id
       return fail('purchase_mode', 403, `this store needs the user to approve this exact purchase: approval ${ap.id} is waiting for them`)

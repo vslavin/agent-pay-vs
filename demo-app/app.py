@@ -43,7 +43,7 @@ import urllib.parse
 import urllib.error
 import urllib.request
 from datetime import datetime, timezone
-from decimal import Decimal
+from decimal import Decimal, ROUND_DOWN
 from http.cookies import SimpleCookie
 
 import shop
@@ -159,8 +159,8 @@ def _post_json_allow_errors(url, data):
         except Exception:
             return {"error": f"http_{e.code}"}
 
-def _json(handler, obj, status=200):
-    enc = json.dumps(obj).encode()
+def _json(handler, obj, status=200, indent=None):
+    enc = json.dumps(obj, indent=indent).encode()
     handler.send_response(status)
     handler.send_header("Content-Type", "application/json")
     handler.send_header("Cache-Control", "no-store")
@@ -256,9 +256,10 @@ def _ousd(value):
         return "—"
 
 def _usd(value):
-    """'$1,234.50' — dollars and cents, used for balances."""
+    """'$1,234.50': dollars and cents, used for balances. Always rounds DOWN, so 26.999998 shows as $26.99:
+    a balance is never displayed as more than the wallet holds."""
     try:
-        return f"${Decimal(value):,.2f}"
+        return f"${Decimal(value).quantize(Decimal('0.01'), rounding=ROUND_DOWN):,.2f}"
     except Exception:
         return "—"
 
@@ -279,8 +280,12 @@ def _wallet_html(w):
     for t in w.get("history", []):
         incoming = t.get("direction") == "in"
         from_treasury = t.get("label") == "treasury"
+        memo = t.get("memo") or ""
+        is_order = re.fullmatch(r"ord_[0-9a-f]{12}", memo) is not None
         if incoming and from_treasury:
             what = "Welcome gift" if t.get("hash") == gift_tx else "From treasury"
+        elif is_order:
+            what = "Sale" if incoming else "Purchase"
         else:
             what = "Received" if incoming else "Sent"
         cp = t.get("counterparty", "")
@@ -291,9 +296,10 @@ def _wallet_html(w):
             f'<td>{html.escape(_when(t.get("timestamp")))}</td>'
             f"<td>{what}</td>"
             f'<td class="mono">{_explorer_link("address", cp, who)}</td>'
-            f'<td class="memo">{html.escape(t.get("memo") or "")}</td>'
+            f'<td class="memo">{html.escape(memo)}</td>'
             f'<td class="num {"st-ok" if incoming else ""}">{amount}</td>'
-            f'<td class="mono">{_explorer_link("tx", t.get("hash", ""), "view")}</td></tr>')
+            f'<td class="mono" style="white-space:nowrap">{_explorer_link("tx", t.get("hash", ""), "view")}'
+            f'{" · <a href=/receipt/" + memo + ">receipt</a>" if is_order else ""}</td></tr>')
     if not rows:
         rows.append('<tr><td colspan="6" class="empty">No transactions yet.</td></tr>')
     gift = (w.get("gift") or {}).get("status")
@@ -445,6 +451,16 @@ _pending_mandates = {}   # token -> {sub, agent_id, params, created}
 MANDATE_HOURS = {1: "1 hour", 24: "24 hours", 168: "7 days", 720: "30 days"}
 AMOUNT_RE = re.compile(r"[0-9]+(\.[0-9]{1,6})?")
 
+def _norm_amount(text):
+    """Same normal form as the wallet service (150.00 -> 150, 0.50 -> 0.5), so both sides hash the same terms."""
+    return format(Decimal(text).normalize(), "f")
+
+def _terms_hash(terms):
+    """Hash of the exact terms the user is about to approve. It travels as the sign-in's nonce, so Keycloak's signed
+    ID token proves this account signed in again for these terms and nothing else."""
+    raw = json.dumps(terms, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
+    return base64.urlsafe_b64encode(hashlib.sha256(raw).digest()).rstrip(b"=").decode()
+
 def _agent_owned(sub, agent_id):
     return next((a for a in _agents_all() if a.get("id") == agent_id and a.get("owner_sub") == sub), None)
 
@@ -453,14 +469,15 @@ def _finish_mandate_stepup(claims, token, id_token):
     p = _pending_mandates.pop(token, None)
     if not p or p["sub"] != claims.get("sub") or time.time() - p["created"] > 300:
         return ("err", "That approval expired or belongs to another account, so nothing was signed. Please try again."), "/agents"
-    auth_time = _decode_jwt(id_token).get("auth_time")
-    fresh = isinstance(auth_time, (int, float)) and time.time() - auth_time <= 120
+    idc = _decode_jwt(id_token)
+    auth_time = idc.get("auth_time")
+    fresh = isinstance(auth_time, (int, float)) and time.time() - auth_time <= 120 and idc.get("nonce") == p.get("nonce")
     if p.get("kind") == "approval":
         back = f"/approvals/{p['approval_id']}"
         if not fresh:
             return ("err", "We couldn’t confirm that you signed in again just now, so the purchase was not approved."), back
         try:
-            _wallet_call("POST", f"/approvals/{p['approval_id']}/approve", {"sub": claims["sub"], "authTime": int(auth_time)}, timeout=15)
+            _wallet_call("POST", f"/approvals/{p['approval_id']}/approve", {"sub": claims["sub"], "idToken": id_token}, timeout=20)
             return ("ok", "Approved. The agent can now repeat its checkout and the store will quote this exact purchase."), back
         except urllib.error.HTTPError as e:
             try:
@@ -476,7 +493,7 @@ def _finish_mandate_stepup(claims, token, id_token):
     if not _agent_owned(claims["sub"], p["agent_id"]):
         return ("err", "That agent isn’t yours."), "/agents"
     try:
-        out = _wallet_call("POST", "/mandates", {"sub": claims["sub"], "agentId": p["agent_id"], **p["params"]}, timeout=15)
+        out = _wallet_call("POST", "/mandates", {"sub": claims["sub"], "agentId": p["agent_id"], **p["params"], "proof": {"idToken": id_token}}, timeout=20)
         return ("ok", f"Mandate {out['id']} granted. Your agent can now buy within those limits."), back
     except urllib.error.HTTPError as e:
         try:
@@ -539,7 +556,14 @@ def _agent_detail_html(agent, mandates, merchants, csrf, flash="", approvals=(),
         f'<tr><td>{e(o.get("item") or o["sku"])}<div class="dim small">{e(o["businessName"])} · {e(o["id"])}</div></td>'
         f'<td>{e(_ousd(o["amount"]))}</td>'
         f'<td><span class="{ {"paid": "st-ok", "payment_required": "st-wait", "paying": "st-wait"}.get(o["status"], "st-err") }">{e(o["status"].replace("_", " "))}</span>'
-        f'{"<div class=small>signed receipts ✔</div>" if (o.get("receipts") or {}).get("payment") else ""}</td>'
+        + (f'<form class="inline-form" method="post" action="/agents/retry"><input type="hidden" name="csrf" value="{e(csrf, quote=True)}">'
+           f'<input type="hidden" name="order" value="{e(o["id"], quote=True)}"><button class="btn-mini" type="submit">Retry</button></form>'
+           if not readonly and csrf and o["status"] in ("failed", "expired") else "") +
+        (f'<form class="inline-form" method="post" action="/agents/pay-order"><input type="hidden" name="csrf" value="{e(csrf, quote=True)}">'
+         f'<input type="hidden" name="order" value="{e(o["id"], quote=True)}"><button class="btn-mini" type="submit">Pay now</button></form>'
+         if not readonly and csrf and o["status"] == "payment_required" else "") +
+        f'{"<div class=small>signed receipts ✔</div>" if o["status"] == "paid" and (o.get("receipts") or {}).get("payment") else ""}'
+        f'{"<div class=small><a href=/receipt/" + e(o["id"]) + ">receipt</a> · <a href=/orders/" + e(o["id"]) + "/evidence.json>evidence</a></div>" if (o.get("receipts") or {}).get("mandate") else ""}</td>'
         f'<td class="mono">{_explorer_link("tx", o["txHash"], e(o["txHash"][:10]) + "…") if o.get("txHash") else "—"}</td>'
         f'<td>{e(_when(_iso_to_epoch(o["createdAt"])))}</td></tr>' for o in orders)
     purchases_html = ('<div class="divider" style="margin-top:28px">PURCHASES</div>'
@@ -619,6 +643,29 @@ def _run_agent(run):
         sku = product["sku"]
         run["item_name"], run["price"] = product["name"], product["price"]
         _run_step(run, f"The agent wants {product['name']} ({sku}) for {product['price']} OUSD from {merchant['businessName'] or username}.")
+
+        def pay_it(order_id):
+            _run_step(run, "Paying from your wallet on Tempo testnet…")
+            try:
+                out = _wallet_call("POST", f"/agents/{agent_id}/pay", {"orderId": order_id}, timeout=120)
+            except urllib.error.HTTPError as e:
+                run["status"], run["retry"] = "failed", True
+                _run_step(run, f"The payment did not go through: {_err_text(e)} Nothing was charged. Fix that, then retry: the agent will ask the store again, and any approval you gave is reused while it is still valid.")
+                return
+            run["tx"], run["receipts"] = out.get("txHash"), sorted((out.get("receipts") or {}).keys())
+            run["status"] = "paid"
+            _run_step(run, "The store confirmed the transfer on-chain and issued a signed payment receipt. Done.")
+
+        if run.get("existing_order"):
+            o = _wallet_call("GET", f"/orders/{run['existing_order']}", timeout=10)
+            if o["status"] != "payment_required" or o["agentId"] != agent_id:
+                run["status"], run["retry"] = "failed", o["status"] in ("failed", "expired")
+                _run_step(run, f"That quote is {o['status'].replace('_', ' ')}, so it can’t be paid any more." + (" Use Retry to ask the store again." if run["retry"] else ""))
+                return
+            run["quote"], run["order_id"] = {"amount": o["amount"], "payTo": merchant["address"]}, o["id"]
+            _run_step(run, f"The agent already holds an open quote for this ({o['id']}, valid until {_long_time(o['expiresAt'])}), so it pays that one without asking the store again.")
+            pay_it(o["id"])
+            return
         order = {"amount": product["price"], "currency": "OUSD", "merchant": username, "quantity": 1, "sku": sku}
         path = f"/shop/{username}/checkout"
 
@@ -648,8 +695,8 @@ def _run_agent(run):
                     _run_step(run, "You declined, so the store refused the purchase.")
                     return
             else:
-                run["status"] = "failed"
-                _run_step(run, "Nobody approved within 5 minutes, so the agent gave up.")
+                run["status"], run["retry"] = "failed", True
+                _run_step(run, "Nobody approved within 5 minutes, so the agent gave up. You can retry.")
                 return
             run["status"], run["approval_path"] = "running", None
             _run_step(run, "Approved. The agent retries the checkout.")
@@ -663,16 +710,7 @@ def _run_agent(run):
             run["status"] = "quoted"
             _run_step(run, "You chose quote only, so nothing was paid. The quote is valid for 5 minutes.")
             return
-        _run_step(run, "Paying from your wallet on Tempo testnet…")
-        try:
-            out = _wallet_call("POST", f"/agents/{agent_id}/pay", {"orderId": resp["orderId"]}, timeout=120)
-        except urllib.error.HTTPError as e:
-            run["status"] = "failed"
-            _run_step(run, f"The payment did not go through: {_err_text(e)}")
-            return
-        run["tx"], run["receipts"] = out.get("txHash"), sorted((out.get("receipts") or {}).keys())
-        run["status"] = "paid"
-        _run_step(run, "The store confirmed the transfer on-chain and issued a signed payment receipt. Done.")
+        pay_it(resp["orderId"])
     except urllib.error.HTTPError as e:
         run["status"] = "failed"
         _run_step(run, f"Something was refused along the way: {_err_text(e)}")
@@ -680,7 +718,7 @@ def _run_agent(run):
         run["status"] = "failed"
         _run_step(run, f"Something went wrong: {e}")
 
-def _start_run(sub, agent, mandate_id, store, sku, pay, base):
+def _start_run(sub, agent, mandate_id, store, sku, pay, base, existing_order=None):
     now = time.time()
     with _runs_lock:
         for k in [k for k, v in _runs.items() if now - v["created"] > RUN_TTL]:
@@ -691,12 +729,12 @@ def _start_run(sub, agent, mandate_id, store, sku, pay, base):
         run = {"id": "run_" + secrets.token_hex(8), "sub": sub, "agent_id": agent["id"], "agent_name": agent["name"],
                "mandate_id": mandate_id, "store": store, "sku": sku, "pay": pay, "created": now, "status": "running",
                "log": [], "checks": [], "base": base, "authority": urllib.parse.urlparse(base).netloc,
-               "approval_path": None, "quote": None, "order_id": None, "tx": None, "receipts": [], "item_name": None, "price": None}
+               "approval_path": None, "retry": False, "existing_order": existing_order, "quote": None, "order_id": None, "tx": None, "receipts": [], "item_name": None, "price": None}
         _runs[run["id"]] = run
     threading.Thread(target=_run_agent, args=(run,), daemon=True).start()
     return run
 
-def _run_html(run):
+def _run_html(run, csrf=None):
     e = html.escape
     label, cls = RUN_LABELS[run["status"]]
     active = run["status"] in ("running", "waiting_approval")
@@ -721,7 +759,17 @@ def _run_html(run):
                 + row("Pay to", e(run["quote"]["payTo"]), True))
         if run["tx"]:
             out += row("Transaction", _explorer_link("tx", run["tx"], e(run["tx"][:18]) + "…"), True)
-            out += row("Receipts", e(" and ".join(run["receipts"]) or "—") + " (signed by the store)")
+            out += row("Receipts", e(" and ".join(run["receipts"]) or "—") + f' (signed by the store) · <a href="/receipt/{e(run["order_id"], quote=True)}">view the receipt</a>')
+    retry = ""
+    if run["retry"] and run["status"] == "failed" and csrf:
+        retry = ('<form method="post" action="/agents/retry" style="margin-top:20px">'
+                 f'<input type="hidden" name="csrf" value="{e(csrf, quote=True)}"><input type="hidden" name="run" value="{e(run["id"], quote=True)}">'
+                 '<button class="btn" type="submit">Retry the purchase</button></form>')
+    if run["status"] == "quoted" and run["order_id"] and csrf:
+        retry = ('<form method="post" action="/agents/pay-order" style="margin-top:20px">'
+                 f'<input type="hidden" name="csrf" value="{e(csrf, quote=True)}"><input type="hidden" name="run" value="{e(run["id"], quote=True)}">'
+                 '<button class="btn" type="submit">Pay for it now</button></form>')
+    out += retry
     nav = f'<a class="btn" style="margin-top:28px" href="/agents/direct?agent={e(run["agent_id"], quote=True)}">Direct another errand</a>'
     refresh = '<script>setTimeout(function () { location.reload(); }, 2500);</script>' if active else ""
     return out + nav + refresh
@@ -848,6 +896,104 @@ def _checkout_core(base_url, authority, path, username, sku, mandates, sig_heade
         if ap["status"] == "pending":
             resp["status"] = "approval_required"
     return out.get("httpStatus", 403), resp
+
+def _amount(value):
+    """An exact amount for a receipt: at least two decimals, never rounded ('420' -> '420.00', '10.15678' stays)."""
+    try:
+        s = format(Decimal(str(value)).normalize(), "f")
+        whole, _, frac = s.partition(".")
+        return f"{int(whole):,}.{(frac + '00')[:max(2, len(frac))]}"
+    except Exception:
+        return "—"
+
+def _long_time(iso):
+    try:
+        return datetime.fromisoformat(str(iso).replace("Z", "+00:00")).astimezone(timezone.utc).strftime("%d %b %Y, %H:%M:%S UTC")
+    except Exception:
+        return "—"
+
+# status -> (stamp, stamp style, heading, receipt-number label, date label, total label)
+RECEIPT_KINDS = {
+    "paid":             ("PAID",    "paid",   "Receipt",          "Receipt no.", "Date",   "Total paid"),
+    "payment_required": ("UNPAID",  "quoted", "Quote, not paid",  "Quote no.",   "Quoted", "Amount due"),
+    "paying":           ("PAYING",  "quoted", "Payment in progress", "Order no.", "Quoted", "Amount due"),
+    "expired":          ("EXPIRED", "void",   "Quote expired, not paid", "Quote no.", "Quoted", "Amount due"),
+    "failed":           ("FAILED",  "void",   "Payment failed",   "Order no.",   "Quoted", "Amount due"),
+}
+
+def _claims_table(jws):
+    try:
+        c = _decode_jwt(jws)
+    except Exception:
+        return ""
+    rows = []
+    for k in ("iss", "iat", "result", "status", "error", "error_description", "reference", "payment_id", "network_confirmation_id"):
+        if k in c:
+            v = _long_time(datetime.fromtimestamp(c[k], timezone.utc).isoformat()) if k == "iat" else c[k]
+            rows.append(f"<tr><td>{html.escape(k)}</td><td>{html.escape(str(v))}</td></tr>")
+    return f"<table>{''.join(rows)}</table>"
+
+def _receipt_html(o, owner=False, csrf=None):
+    """A printable page for one order: a receipt if it was paid, otherwise a quote or a failed payment. Public-safe:
+    no user or agent names unless the viewer owns the order."""
+    e = html.escape
+    stamp, cls, heading, no_label, date_label, total_label = RECEIPT_KINDS.get(
+        o["status"], (o["status"].upper(), "void", "Order", "Order no.", "Date", "Amount"))
+    paid, failed = o["status"] == "paid", o["status"] == "failed"
+    store = f'/shop/{urllib.parse.quote(o["merchant"])}'
+    raw = f'{store}/orders/{o["id"]}'
+    when = o.get("paidAt") or o.get("createdAt")
+    def row(k, v):
+        return f'<div class="row"><span>{e(k)}</span><span>{v}</span></div>'
+    def check(state, text):
+        return f'<li><span class="{ {True: "ok", False: "no", None: "na"}[state] }">{ {True: "✔", False: "✘", None: "–"}[state] }</span><span>{text}</span></li>'
+    v = o.get("verified") or {}
+    has_mr = v.get("mandate") is not None
+    out = (f'<div class="head"><div class="kicker">{e(heading)}</div><h1><a href="{e(store, quote=True)}">{e(o["businessName"])}</a></h1>'
+           f'<div class="sub">{e(o["merchant"])} · Agent Pay demo store</div></div><div class="stamp {cls}">{stamp}</div>')
+    out += '<div class="rows">' + row(no_label, e(o["id"])) + row(date_label, e(_long_time(when))) + row("Status", e(stamp.title())) + "</div>"
+    out += (f'<div class="item"><div class="line"><span class="name">{e(o.get("item") or o["sku"])}</span><span>{e(_amount(o["amount"]))}</span></div>'
+            f'<small>SKU {e(o["sku"])} · quantity 1</small></div>')
+    out += f'<div class="total"><span>{total_label}</span><span>{e(_amount(o["amount"]))} {e(o["currency"])}</span></div>'
+    out += ('<div class="note">' + ("Paid in OUSD on Tempo testnet. Test tokens, no real money." if paid
+            else f'Nothing was charged. {e(o["error"])}' if failed and o.get("error")
+            else "Nothing was charged. OUSD is a test token on Tempo testnet.") + "</div>")
+    out += "<h2>Payment</h2>" + (
+        row("Transaction", _explorer_link("tx", o["txHash"], e(o["txHash"][:10]) + "…" + e(o["txHash"][-6:]))) + (row("Block", e(str(o["blockNumber"]))) if o.get("blockNumber") else "")
+        if o.get("txHash") else row("Payment", "failed: no money moved" if failed else "not paid" + (f' · quote valid until {e(_long_time(o["expiresAt"]))}' if o["status"] == "payment_required" else "")))
+    pay_text = ("Store’s signed payment receipt: signature " + ("valid" if v.get("payment") else "not valid")) if paid else \
+               ("Store’s signed record of the failed payment: signature " + ("valid" if v.get("payment") else "not valid")) if v.get("payment") is not None else \
+               "No payment receipt: nothing was paid"
+    out += "<h2>How it was authorized</h2><ul class=\"checks\">" + "".join([
+        check(True if has_mr else None, "Agent’s signed request verified by the store"),
+        check(True if has_mr else None, "Within a mandate signed by the buyer: store, limit and budget checked"),
+        check(True if o.get("approved") else None, "Buyer approved this exact purchase" if o.get("approved") else "No per-purchase approval needed at this store"),
+        check(v.get("mandate"), "Store’s signed mandate receipt: signature " + ("valid" if v.get("mandate") else "not valid" if v.get("mandate") is False else "not issued")),
+        check(v.get("payment") if v.get("payment") is not None else None, pay_text),
+    ]) + "</ul>"
+    if owner:
+        out += (f'<div class="owner"><b>Your purchase</b><br>Agent {e(o["agentName"])}<br>Mandate {e(o["mandateId"])}'
+                f'<br><a href="/orders/{e(o["id"], quote=True)}/evidence.json">Download the evidence bundle</a> to check it independently.')
+        if o["status"] in ("failed", "expired") and csrf:
+            out += ('<form method="post" action="/agents/retry" style="margin-top:10px">'
+                    f'<input type="hidden" name="csrf" value="{e(csrf, quote=True)}"><input type="hidden" name="order" value="{e(o["id"], quote=True)}">'
+                    '<button class="btn primary" type="submit">Ask the agent to try again</button></form>'
+                    '<div style="margin-top:6px;color:var(--muted)">The agent asks the store again and pays from your wallet. If the store needed your approval, it is reused while it is still valid.</div>')
+        if o["status"] == "payment_required" and csrf:
+            out += ('<form method="post" action="/agents/pay-order" style="margin-top:10px">'
+                    f'<input type="hidden" name="csrf" value="{e(csrf, quote=True)}"><input type="hidden" name="order" value="{e(o["id"], quote=True)}">'
+                    '<button class="btn primary" type="submit">Pay this quote now</button></form>'
+                    '<div style="margin-top:6px;color:var(--muted)">The agent pays the quote it already holds, from your wallet, without asking the store again.</div>')
+        out += "</div>"
+    for key, title in (("mandate", "Mandate receipt"), ("payment", "Payment receipt" if paid else "Record of the failed payment")):
+        jws = (o.get("receipts") or {}).get(key)
+        if jws:
+            out += f'<details><summary>{title} (signed by the store)</summary>{_claims_table(jws)}<pre class="jws">{e(jws)}</pre></details>'
+    out += (f'<div class="actions"><a class="btn primary" href="{e(raw, quote=True)}">View raw JSON</a>'
+            '<a class="btn" href="#" onclick="window.print();return false">Print</a>'
+            f'<a class="btn" href="{e(store, quote=True)}">Back to the store</a></div>'
+            '<div class="foot">Agent Pay · signed receipts, checked on-chain</div>')
+    return out
 
 def _agent_page(body, title="AGENT", subtitle="Identity and mandates", back_href="/agents", back_text="Back to my agents"):
     return _render("agent_detail.html", AGENT_BODY=body, TITLE=html.escape(title), SUBTITLE=html.escape(subtitle),
@@ -1071,10 +1217,12 @@ class DemoHandler(http.server.BaseHTTPRequestHandler):
         elif p.path == "/agents/direct": self._direct_form(qs)
         elif re.fullmatch(r"/agents/run/run_[0-9a-f]{16}", p.path): self._run_page(p.path)
         elif re.fullmatch(r"/agents/agt_[0-9a-f]{12}", p.path): self._agent_detail(p.path)
+        elif re.fullmatch(r"/orders/ord_[0-9a-f]{12}/evidence\.json", p.path): self._evidence(p.path)
         elif p.path == "/approvals":  self._approvals()
         elif re.fullmatch(r"/approvals/apr_[0-9a-f]{12}", p.path): self._approval_detail(p.path)
         elif p.path == "/tap/keys" or p.path.startswith("/tap/keys/"): self._tap_keys(p.path, qs)
         elif p.path == "/keys":       self._tap_keys(p.path, qs)
+        elif re.fullmatch(r"/receipt/ord_[0-9a-f]{12}", p.path): self._receipt(p.path)
         elif re.fullmatch(r"/shop/[^/]+/orders/ord_[0-9a-f]{12}", p.path): self._shop_order(p.path)
         elif p.path.startswith("/shop/"): self._shop(p.path)
         elif p.path.startswith("/treasury/visa/"): self._visa_record(p.path)
@@ -1120,6 +1268,10 @@ class DemoHandler(http.server.BaseHTTPRequestHandler):
             self._agents_create()
         elif path == "/agents/direct":
             self._direct_start()
+        elif path == "/agents/retry":
+            self._retry()
+        elif path == "/agents/pay-order":
+            self._pay_order()
         elif re.fullmatch(r"/approvals/apr_[0-9a-f]{12}/(approve|reject)", path):
             self._approval_decide(path)
         elif re.fullmatch(r"/agents/agt_[0-9a-f]{12}/mandates", path):
@@ -1273,9 +1425,11 @@ class DemoHandler(http.server.BaseHTTPRequestHandler):
 
     # ── GET /shop/<u>/orders/<id>  and  POST /shop/<u>/orders/<id>/confirm  (public, for agents and the store) ──
     def _order_public(self, o):
-        return {"orderId": o["id"], "status": o["status"], "sku": o["sku"], "item": o["item"], "amount": o["amount"],
-                "currency": o["currency"], "expiresAt": o["expiresAt"], "txHash": o["txHash"], "paidAt": o["paidAt"],
-                "receipts": o["receipts"]}
+        return {"orderId": o["id"], "status": o["status"], "merchant": o["merchant"], "businessName": o["businessName"],
+                "sku": o["sku"], "item": o["item"], "amount": o["amount"], "currency": o["currency"], "createdAt": o["createdAt"],
+                "expiresAt": o["expiresAt"], "paidAt": o["paidAt"], "txHash": o["txHash"], "blockNumber": o.get("blockNumber"),
+                "approvedByBuyer": o.get("approved", False), "receiptsVerified": o.get("verified"), "receipts": o["receipts"],
+                "receiptPage": f"/receipt/{o['id']}"}
 
     def _shop_order(self, path):
         _, _, user, _, oid = path.split("/")
@@ -1290,7 +1444,7 @@ class DemoHandler(http.server.BaseHTTPRequestHandler):
         if o["merchant"].lower() != urllib.parse.unquote(user).lower():
             _json(self, {"status": "rejected", "code": "no_such_order"}, 404)
             return
-        _json(self, self._order_public(o))
+        _json(self, self._order_public(o), indent=2)
 
     def _shop_confirm(self, path):
         _, _, user, _, oid, _ = path.split("/")
@@ -1341,7 +1495,63 @@ class DemoHandler(http.server.BaseHTTPRequestHandler):
         if what == "catalog.json":
             _json(self, shop.catalog(m, store_url))
         else:
-            _html(self, shop.render(m, store_url))
+            try:
+                history = _wallet_call("GET", f"/merchants/{urllib.parse.quote(username, safe='')}/orders", timeout=10)["orders"]
+            except Exception:
+                history = None
+            _html(self, shop.render(m, store_url, history))
+
+    # ── /receipt/<id>  (public receipt; the buyer and admins also see who bought it) ──
+    def _receipt(self, path):
+        oid = path.rsplit("/", 1)[1]
+        try:
+            o = _wallet_call("GET", f"/orders/{oid}", timeout=10)
+        except urllib.error.HTTPError:
+            _html(self, _render("receipt.html", TITLE="No such receipt", RECEIPT='<div class="head"><h1>No such receipt</h1><div class="sub">Check the link, or ask the store.</div></div>'), 404)
+            return
+        except Exception:
+            _html(self, "<h1>Receipts are unavailable right now.</h1>", 503)
+            return
+        owner = False
+        session = _sessions.get(_get_sid(self)) or {}
+        claims = session.get("claims")
+        if claims:
+            try:
+                owner = "admin" in (claims.get("roles") or []) or any(
+                    x["id"] == oid for x in _wallet_call("GET", "/orders?sub=" + urllib.parse.quote(claims["sub"], safe=""), timeout=10)["orders"])
+            except Exception:
+                owner = False
+        csrf = session.setdefault("csrf", secrets.token_urlsafe(24)) if owner and claims and _is_user(claims) else None
+        _html(self, _render("receipt.html", TITLE=html.escape(f"{RECEIPT_KINDS.get(o['status'], ('', '', 'Order'))[2]} {oid} · {o['businessName']}"), RECEIPT=_receipt_html(o, owner, csrf)))
+
+    # ── /orders/<id>/evidence.json  (owner or admin: everything needed to check the purchase independently) ──
+    def _evidence(self, path):
+        claims = (_sessions.get(_get_sid(self)) or {}).get("claims")
+        if not claims:
+            _redirect(self, "/")
+            return
+        oid = path.split("/")[2]
+        try:
+            if "admin" not in (claims.get("roles") or []):
+                mine = _wallet_call("GET", "/orders?sub=" + urllib.parse.quote(claims["sub"], safe=""), timeout=10)["orders"]
+                if not any(o["id"] == oid for o in mine):
+                    _html(self, "<h1>404</h1><p>No such purchase.</p>", 404)
+                    return
+            bundle = _wallet_call("GET", f"/orders/{oid}/evidence", timeout=15)
+        except urllib.error.HTTPError:
+            _html(self, "<h1>404</h1><p>No such purchase.</p>", 404)
+            return
+        except Exception as ex:
+            _html(self, f"<h1>Wallet service unreachable</h1><p>{html.escape(str(ex))}</p>", 503)
+            return
+        enc = json.dumps(bundle, indent=2).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Disposition", f'attachment; filename="evidence-{oid}.json"')
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Content-Length", str(len(enc)))
+        self.end_headers()
+        self.wfile.write(enc)
 
     # ── /agents/direct  (pick agent, mandate, store, item and action; the agent does the errand) ──
     def _direct_form(self, qs):
@@ -1407,6 +1617,99 @@ class DemoHandler(http.server.BaseHTTPRequestHandler):
             return
         _redirect(self, f"/agents/run/{run['id']}")
 
+    def _retry(self):
+        """Send the agent again for a purchase that did not go through: from an unpaid order or from a failed errand."""
+        gate = self._agents_gate()
+        if not gate:
+            return
+        session, claims = gate
+        length = min(int(self.headers.get("Content-Length") or 0), 8192)
+        form = urllib.parse.parse_qs(self.rfile.read(length).decode("utf-8", "replace"))
+        one = lambda k: (form.get(k) or [""])[0].strip()
+        if not session.get("csrf") or not secrets.compare_digest(one("csrf").encode(), session["csrf"].encode()):
+            _html(self, "<h1>403</h1><p>This form expired. <a href='/agents'>Reload the page</a> and try again.</p>", 403)
+            return
+        src = None
+        if one("run"):
+            with _runs_lock:
+                r = _runs.get(one("run"))
+            if r and r["sub"] == claims["sub"] and r["status"] == "failed" and r["retry"]:
+                src = (r["agent_id"], r["mandate_id"], r["store"], r["sku"])
+        elif one("order"):
+            try:
+                mine = _wallet_call("GET", "/orders?sub=" + urllib.parse.quote(claims["sub"], safe=""), timeout=10)["orders"]
+            except Exception:
+                mine = []
+            o = next((x for x in mine if x["id"] == one("order")), None)
+            if o and o["status"] in ("failed", "expired"):
+                src = (o["agentId"], o["mandateId"], o["merchant"], o["sku"])
+        if not src:
+            session["aflash"] = ("err", "That purchase can’t be retried from here. Start a new errand instead.")
+            _redirect(self, "/agents/direct")
+            return
+        agent_id, mandate_id, store, sku = src
+        agent = _agent_owned(claims["sub"], agent_id)
+        try:
+            m = next((x for x in _wallet_call("GET", "/mandates?sub=" + urllib.parse.quote(claims["sub"], safe=""))["mandates"] if x["id"] == mandate_id), None)
+        except Exception:
+            m = None
+        if not agent or not m or m["status"] != "active":
+            session["aflash"] = ("err", "The mandate for that purchase is no longer active, so the agent can’t try again. Grant a new one on the agent’s page.")
+            _redirect(self, f"/agents/{agent_id}" if agent else "/agents")
+            return
+        run = _start_run(claims["sub"], agent, mandate_id, store, sku, True, _public_base(self))
+        if not run:
+            session["aflash"] = ("err", "Three errands are already running. Wait for one to finish.")
+            _redirect(self, "/agents/direct")
+            return
+        _redirect(self, f"/agents/run/{run['id']}")
+
+    def _pay_order(self):
+        """Pay a quote that is still open: the agent pays the order it already holds, with no new checkout."""
+        gate = self._agents_gate()
+        if not gate:
+            return
+        session, claims = gate
+        length = min(int(self.headers.get("Content-Length") or 0), 8192)
+        form = urllib.parse.parse_qs(self.rfile.read(length).decode("utf-8", "replace"))
+        one = lambda k: (form.get(k) or [""])[0].strip()
+        if not session.get("csrf") or not secrets.compare_digest(one("csrf").encode(), session["csrf"].encode()):
+            _html(self, "<h1>403</h1><p>This form expired. <a href='/agents'>Reload the page</a> and try again.</p>", 403)
+            return
+        src = None
+        try:
+            mine = _wallet_call("GET", "/orders?sub=" + urllib.parse.quote(claims["sub"], safe=""), timeout=10)["orders"]
+        except Exception:
+            mine = []
+        oid = one("order")
+        if one("run"):
+            with _runs_lock:
+                r = _runs.get(one("run"))
+            oid = r["order_id"] if r and r["sub"] == claims["sub"] and r["status"] == "quoted" else ""
+        o = next((x for x in mine if x["id"] == oid), None)
+        if o and o["status"] == "payment_required":
+            src = (o["agentId"], o["mandateId"], o["merchant"], o["sku"], o["id"])
+        if not src:
+            session["aflash"] = ("err", "That quote is no longer open (it was paid, or it expired). Use Retry or start a new errand.")
+            _redirect(self, "/agents/direct")
+            return
+        agent_id, mandate_id, store, sku, order_id = src
+        agent = _agent_owned(claims["sub"], agent_id)
+        try:
+            m = next((x for x in _wallet_call("GET", "/mandates?sub=" + urllib.parse.quote(claims["sub"], safe=""))["mandates"] if x["id"] == mandate_id), None)
+        except Exception:
+            m = None
+        if not agent or not m or m["status"] != "active":
+            session["aflash"] = ("err", "The mandate for that purchase is no longer active, so the agent can’t pay. Grant a new one on the agent’s page.")
+            _redirect(self, f"/agents/{agent_id}" if agent else "/agents")
+            return
+        run = _start_run(claims["sub"], agent, mandate_id, store, sku, True, _public_base(self), existing_order=order_id)
+        if not run:
+            session["aflash"] = ("err", "Three errands are already running. Wait for one to finish.")
+            _redirect(self, "/agents/direct")
+            return
+        _redirect(self, f"/agents/run/{run['id']}")
+
     def _run_page(self, path):
         gate = self._agents_gate()
         if not gate:
@@ -1417,7 +1720,8 @@ class DemoHandler(http.server.BaseHTTPRequestHandler):
         if not run or run["sub"] != claims["sub"]:
             _html(self, "<h1>404</h1><p>No such errand. <a href='/agents/direct'>Back</a></p>", 404)
             return
-        _html(self, _agent_page(_run_html(run), title="ERRAND", subtitle="Your agent at work", back_href="/agents/direct", back_text="Back to Direct an agent"))
+        csrf = session.setdefault("csrf", secrets.token_urlsafe(24))
+        _html(self, _agent_page(_run_html(run, csrf), title="ERRAND", subtitle="Your agent at work", back_href="/agents/direct", back_text="Back to Direct an agent"))
 
     # ── /agents/<id>  (owner: identity, mandates, and the form to grant one) ──
     def _agent_detail(self, path):
@@ -1526,9 +1830,16 @@ class DemoHandler(http.server.BaseHTTPRequestHandler):
             now = time.time()
             for k in [k for k, v in _pending_mandates.items() if now - v["created"] > 300]:
                 del _pending_mandates[k]
+            try:
+                a = _wallet_call("GET", f"/approvals/{apr_id}?sub=" + urllib.parse.quote(claims["sub"], safe=""))
+            except Exception:
+                session["aflash"] = ("err", "Could not load that approval request. Try again.")
+                _redirect(self, back)
+                return
+            nonce = _terms_hash({"type": "approval", "approvalId": apr_id, "orderHash": a["orderHash"], "mandateId": a["mandateId"]})
             tok = secrets.token_urlsafe(24)
-            _pending_mandates[tok] = {"kind": "approval", "sub": claims["sub"], "approval_id": apr_id, "created": now}
-            self._login(extra={"prompt": "login", "max_age": "0", "login_hint": claims.get("preferred_username", "")}, mandate=tok)
+            _pending_mandates[tok] = {"kind": "approval", "sub": claims["sub"], "approval_id": apr_id, "created": now, "nonce": nonce}
+            self._login(extra={"prompt": "login", "max_age": "0", "nonce": nonce, "login_hint": claims.get("preferred_username", "")}, mandate=tok)
             return
         try:
             _wallet_call("POST", f"/approvals/{apr_id}/reject", {"sub": claims["sub"]}, timeout=15)
@@ -1574,10 +1885,13 @@ class DemoHandler(http.server.BaseHTTPRequestHandler):
             for k in [k for k, v in _pending_mandates.items() if now - v["created"] > 300]:
                 del _pending_mandates[k]
             token = secrets.token_urlsafe(24)
-            _pending_mandates[token] = {"sub": claims["sub"], "agent_id": agent["id"], "created": now,
+            terms = {"type": "mandate", "sub": claims["sub"], "agentId": agent["id"], "merchants": sorted(set(merchants)),
+                     "maxPerPurchase": _norm_amount(max_pp), "budget": _norm_amount(budget), "hours": hours}
+            nonce = _terms_hash(terms)
+            _pending_mandates[token] = {"sub": claims["sub"], "agent_id": agent["id"], "created": now, "nonce": nonce,
                                         "params": {"merchants": merchants, "maxPerPurchase": max_pp, "budget": budget, "hours": hours}}
-            # Force a fresh passkey sign-in: this is the "trusted surface" moment that authorizes the signature.
-            self._login(extra={"prompt": "login", "max_age": "0", "login_hint": claims.get("preferred_username", "")}, mandate=token)
+            # Force a fresh sign-in bound to these exact terms (the nonce): Keycloak's signed ID token is the proof.
+            self._login(extra={"prompt": "login", "max_age": "0", "nonce": nonce, "login_hint": claims.get("preferred_username", "")}, mandate=token)
             return
         _redirect(self, back)
 

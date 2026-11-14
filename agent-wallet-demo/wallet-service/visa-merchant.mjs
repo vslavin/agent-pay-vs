@@ -45,7 +45,13 @@ export async function registerMerchantWithVisa({ visa, businessName, merchantUrl
         encryptionKey: publicKey.export({ type: 'spki', format: 'der' }).toString('base64'),
       },
     })
-    if (created.status === 409) throw new VisaRegistrationError('Visa already has a merchant with this URL.')
+    if (created.status === 409) {
+      const d = detail(created)
+      // Visa's sandbox allows one merchant per domain, so every store served from the same domain after the first is refused.
+      throw new VisaRegistrationError(/domain/i.test(d)
+        ? `Visa allows only one merchant per domain, and ${new URL(merchantUrl).host} is already registered (${d}). Another store needs its own domain to be registered. A store works without being registered.`
+        : `Visa says this merchant already exists (${d}). It does not say whether the URL, the Visa Merchant ID or the name clashed, and it offers no way to list or delete merchants.`)
+    }
     if (created.status !== 201) throw new VisaRegistrationError(`Visa rejected the registration: ${detail(created)}`)
     merchantId = created.json?.id
     keyId = created.json?.keys?.[0]?.id

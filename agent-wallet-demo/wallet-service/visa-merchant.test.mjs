@@ -74,7 +74,12 @@ test('the private key is handed over once, before activation, and never sent to 
 
 test('a duplicate merchant URL is reported plainly', async () => {
   const visa = fakeVisa({ 'POST /vmrs/v1/merchants': { status: 409, json: { detail: 'merchantUrl exists' } } })
-  await assert.rejects(registerMerchantWithVisa({ visa, ...args }), (e) => e instanceof VisaRegistrationError && /already has a merchant/.test(e.message))
+  await assert.rejects(registerMerchantWithVisa({ visa, ...args }), (e) => e instanceof VisaRegistrationError && /already exists \(HTTP 409 - merchantUrl exists\)/.test(e.message))
+})
+
+test('a 409 about the domain says Visa allows one merchant per domain', async () => {
+  const visa = fakeVisa({ 'POST /vmrs/v1/merchants': { status: 409, json: { detail: 'This domain is already registered' } } })
+  await assert.rejects(registerMerchantWithVisa({ visa, ...args }), (e) => e instanceof VisaRegistrationError && /only one merchant per domain/.test(e.message) && /works without being registered/.test(e.message))
 })
 
 test('a rejected registration carries Visa\'s reason', async () => {

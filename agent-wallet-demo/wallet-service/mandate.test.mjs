@@ -179,6 +179,15 @@ test('human-present: approval of a different order does not carry over', () => {
   failsWith(attempt(w, { policy: { mode: 'human_present' } }), 'purchase_mode', 403)
 })
 
+test('human-present: an approval held by an open quote cannot be spent again', () => {
+  const w = world()
+  w.lookups.approvalFor = () => ({ id: 'apr_1', status: 'reserved', orderId: 'ord_1' })
+  const r = attempt(w, { policy: { mode: 'human_present' } })
+  failsWith(r, 'purchase_mode', 403)
+  assert.match(r.checks.find((c) => !c.ok).detail, /already has an open quote \(ord_1\)/)
+  assert.equal(r.context.needsApproval, undefined)   // do not open a second approval either
+})
+
 test('an unknown purchase mode fails closed', () => {
   failsWith(attempt(world(), { policy: { mode: 'whatever' } }), 'purchase_mode', 403)
 })
