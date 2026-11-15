@@ -339,3 +339,8 @@ details.raw pre {
 .steps { margin: 6px 0 0 20px; color: #e8c870; line-height: 1.55; }
 .steps li { margin-bottom: 8px; }
 .checks input[type=radio] { accent-color: var(--gold); width: 16px; height: 16px; }
+
+/* Store links on the main pages */
+.store-links { margin-top: 4px; }
+.store-links .btn { margin-bottom: 0; }
+.stores-divider { margin-top: 28px; }

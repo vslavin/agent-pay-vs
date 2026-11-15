@@ -770,6 +770,13 @@ http.createServer(async (req, res) => {
       if (!w) return send(res, 404, { error: 'no such merchant' })
       return send(res, 200, { username: w.username, businessName: w.businessName ?? '', businessDescription: w.businessDescription ?? '', address: w.address, visa: visaPublic(w.visa), receiptKey: { ...receiptKeyFor(w.username).publicJwk, kid: receiptKeyFor(w.username).kid, alg: 'EdDSA', use: 'sig' } })
     }
+    // Balance only: one RPC call, for the main screen. The full detail below also scans the chain for history.
+    const bal = req.method === 'GET' && req.url.match(/^\/wallets\/([^/?]+)\/balance$/)
+    if (bal) {
+      const w = wallets[decodeURIComponent(bal[1])]
+      if (!w) return send(res, 404, { error: 'no wallet' })
+      return send(res, 200, { address: w.address, balance: await balanceOf(w.address), symbol: 'OUSD' })
+    }
     const one = req.method === 'GET' && req.url.match(/^\/wallets\/([^/?]+)$/)
     if (one) {
       const detail = await walletDetail(decodeURIComponent(one[1]))

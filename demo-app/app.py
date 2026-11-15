@@ -107,6 +107,20 @@ def _render(name: str, **replacements) -> str:
         text = text.replace(f"<!-- {key} -->", value)
     return text
 
+def _store_links_html():
+    """A 'Stores' block of links to every public storefront, or '' if the wallet service is unreachable."""
+    try:
+        stores = _wallet_call("GET", "/merchants", timeout=5)["merchants"]
+    except Exception:
+        return ""
+    if not stores:
+        return ""
+    links = "".join(
+        f'<a class="btn btn-secondary" href="/shop/{urllib.parse.quote(s["username"], safe="")}">'
+        f'{html.escape(s.get("businessName") or s["username"])}</a>'
+        for s in sorted(stores, key=lambda s: (s.get("businessName") or s["username"]).lower()))
+    return f'<div class="divider stores-divider">STORES</div><div class="btn-row store-links">{links}</div>'
+
 # ── PKCE ──────────────────────────────────────────────────────────────────────
 def _pkce_pair():
     verifier  = secrets.token_urlsafe(64)
@@ -206,7 +220,7 @@ def _wallet_summary(claims):
     """Balance row + 'My wallet' button for the main screen. Never raises: if the wallet
     service is down or the wallet is still being created, the row says so."""
     try:
-        w = _wallet_call("GET", "/wallets/" + urllib.parse.quote(claims.get("sub", ""), safe=""), timeout=4)
+        w = _wallet_call("GET", "/wallets/" + urllib.parse.quote(claims.get("sub", ""), safe="") + "/balance", timeout=8)
         bal = f'{_usd(w.get("balance"))} {html.escape(w.get("symbol", "OUSD"))}'
         cls = "info-val big"
     except urllib.error.HTTPError as e:
@@ -1255,9 +1269,9 @@ class DemoHandler(http.server.BaseHTTPRequestHandler):
                           if _is_user(claims) else "")
             body = _render("logged_in.html", NAME=name, USERNAME=username, EMAIL=email,
                            FLASH=flash_html, ADMIN_BANNER=admin_html, AGENTS_BUTTON=agents_btn,
-                           WALLET_SUMMARY=_wallet_summary(claims))
+                           WALLET_SUMMARY=_wallet_summary(claims), STORE_LINKS=_store_links_html())
         else:
-            body = _render("splash.html")
+            body = _render("splash.html", STORE_LINKS=_store_links_html())
         _html(self, body)
 
     def do_POST(self):
