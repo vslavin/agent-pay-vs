@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self' https: http://localhost:* http://127.0.0.1:*; base-uri 'self'; form-action 'none'">
+  <meta name="color-scheme" content="dark light">
+  <title>Check a receipt · Agent Pay</title>
+  <meta name="description" content="Check an Agent Pay receipt yourself: verify the signatures on the mandates, receipts and sign-in proofs in your browser.">
+  <link rel="stylesheet" href="check.css">
+</head>
+<body>
+<a class="skip" href="#steps">Skip to the checks</a>
+
+<header class="top">
+  <div class="wrap">
+    <p class="kicker">Agent Pay</p>
+    <h1>Check a receipt</h1>
+    <p class="lead">A receipt says a person allowed an AI agent to buy something, and that the store accepted it and was paid. You do not have to take the store's word for that, or ours. This page re-checks the signatures itself, one link at a time, so you can see how a mandate holds the whole thing together.</p>
+    <p class="privacy"><strong>Private by design.</strong> Everything you paste or load stays in this browser tab. This page only contacts a server when you press a button that says so (fetching a key, looking up a transaction).</p>
+  </div>
+</header>
+
+<main class="wrap" id="app">
+  <section aria-labelledby="start-h">
+    <h2 id="start-h">How do you want to check?</h2>
+    <div class="choices" role="radiogroup" aria-label="How to provide the evidence">
+      <button class="choice" type="button" role="radio" aria-checked="false" data-mode="bundle">
+        <span class="choice-t">I have an evidence bundle</span>
+        <span class="choice-d">One file (<code>evidence-ord_….json</code>) with everything inside. Load it and every check runs at once.</span>
+      </button>
+      <button class="choice" type="button" role="radio" aria-checked="false" data-mode="pieces">
+        <span class="choice-t">I have the pieces</span>
+        <span class="choice-d">A receipt link, a mandate, a sign-in token… Provide them one at a time and watch each proof appear. Best for learning how mandates work.</span>
+      </button>
+    </div>
+
+    <div id="bundle-box" class="box" hidden>
+      <h3>Load the evidence bundle</h3>
+      <p class="muted">The buyer or an administrator can download it from the receipt page (<em>Download the evidence bundle</em>).</p>
+      <label class="drop" id="drop">
+        <input type="file" id="file" accept=".json,application/json">
+        <span><strong>Choose a file</strong> or drop it here</span>
+      </label>
+      <label for="paste" class="lbl">…or paste its contents</label>
+      <textarea id="paste" rows="4" spellcheck="false" placeholder='{ "version": "agent-pay-evidence/1", … }'></textarea>
+      <div class="row">
+        <button type="button" class="btn" id="load-paste">Check pasted bundle</button>
+        <button type="button" class="btn ghost" id="load-example">Try an example</button>
+      </div>
+      <p id="bundle-msg" class="msg" role="status"></p>
+    </div>
+
+    <div id="pieces-box" class="box" hidden>
+      <h3>What you can check, and with what</h3>
+      <p class="muted">Every piece you add unlocks another link in the chain. You can stop at any point: whatever you have is checked, and the page says what is still missing.</p>
+      <table class="ladder">
+        <thead><tr><th>If you have…</th><th>…you can check</th></tr></thead>
+        <tbody>
+          <tr><td>A receipt link or its raw data</td><td>That the <strong>store</strong> signed the receipts (step 4), and which order they are about (step 1)</td></tr>
+          <tr><td>+ the open mandate and the user's key</td><td>What the <strong>user</strong> allowed (step 2)</td></tr>
+          <tr><td>+ the closed mandate</td><td>What the <strong>agent</strong> committed to, for exactly this order (step 3)</td></tr>
+          <tr><td>+ the agent's signed request</td><td>Which agent called the store, and when (step 5)</td></tr>
+          <tr><td>+ the sign-in proofs</td><td>That the person really said yes (step 6)</td></tr>
+          <tr><td>+ the transaction</td><td>That the money moved (step 7)</td></tr>
+        </tbody>
+      </table>
+      <p class="muted">The buyer's <strong>evidence bundle</strong> contains all of these. The public <strong>raw data</strong> link on a receipt page contains only the first row.</p>
+      <p class="row"><button type="button" class="btn ghost" id="load-example-2">Fill in an example so I can see what each piece looks like</button></p>
+      <p id="pieces-msg" class="msg" role="status"></p>
+    </div>
+  </section>
+
+  <section id="steps" hidden aria-labelledby="steps-h">
+    <h2 id="steps-h">The chain of trust</h2>
+    <div id="verdict" class="verdict" role="status" aria-live="polite"></div>
+    <div id="tamper" class="box tamper" hidden>
+      <h3>Try to break it</h3>
+      <p class="muted">Change something and watch which link fails. A forger would have to do exactly this.</p>
+      <div class="row">
+        <button type="button" class="btn ghost" data-tamper="price">Lower the price to 1</button>
+        <button type="button" class="btn ghost" data-tamper="key">Use a stranger's key for the user</button>
+        <button type="button" class="btn ghost" data-tamper="flip">Change one character of the open mandate</button>
+        <button type="button" class="btn" data-tamper="reset">Put it back</button>
+      </div>
+    </div>
+    <ol id="cards" class="cards"></ol>
+  </section>
+
+  <section class="limits" aria-labelledby="limits-h">
+    <h2 id="limits-h">What this page cannot tell you</h2>
+    <ul>
+      <li><strong>Where a key came from.</strong> A signature proves that whoever holds a key signed something. Keys that arrive inside a bundle are only as trustworthy as the bundle. To check independently, get the store's key from the store's own catalog and Keycloak's keys from its public certificate address (the buttons in steps 4 and 6 do that).</li>
+      <li><strong>That the sign-in was a passkey.</strong> It shows that the account signed in again, bound to the exact terms. The method (<code>amr</code>) is shown when Keycloak recorded it.</li>
+      <li><strong>Whether the user's signing key was used only with consent.</strong> In this demo the wallet service holds it, and signs only after the sign-in above.</li>
+      <li><strong>Which purchase mode the store ran.</strong> A bundle without an approval looks like an autonomous purchase; the bundle does not record the store's setting.</li>
+      <li><strong>The total budget, or a revocation made later.</strong> One order cannot show how much else was spent, and revocation is not part of the evidence.</li>
+    </ul>
+    <p class="muted">The checks are about 400 lines in <a href="verify.js">verify.js</a>, with no libraries; it uses your browser's built-in cryptography. It is a second implementation of the checks in the wallet service, and a test requires the two to agree on every bundle, honest or tampered.</p>
+  </section>
+</main>
+
+<footer class="wrap foot">Agent Pay · demo software on a test network · no real money</footer>
+<script type="module" src="app.js"></script>
+</body>
+</html>

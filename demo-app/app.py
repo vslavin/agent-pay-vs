@@ -70,6 +70,10 @@ DEVICE_GRANT   = "urn:ietf:params:oauth:grant-type:device_code"
 
 BASE_DIR    = pathlib.Path(__file__).parent
 STATIC_DIR  = BASE_DIR / "static"
+# The Check Receipt project lives beside this app; the app only serves its public files, at /check-receipt.
+CHECK_DIR   = BASE_DIR.parent / "check-receipt"
+CHECK_FILES = {"index.html": "text/html; charset=utf-8", "check.css": "text/css; charset=utf-8", "app.js": "text/javascript; charset=utf-8",
+               "verify.js": "text/javascript; charset=utf-8", "example-bundle.json": "application/json"}
 TMPL_DIR    = BASE_DIR / "templates"
 
 # Wallet service (agent-wallet-demo/wallet-service): holds the OUSD treasury and
@@ -987,7 +991,7 @@ def _receipt_html(o, owner=False, csrf=None):
     ]) + "</ul>"
     if owner:
         out += (f'<div class="owner"><b>Your purchase</b><br>Agent {e(o["agentName"])}<br>Mandate {e(o["mandateId"])}'
-                f'<br><a href="/orders/{e(o["id"], quote=True)}/evidence.json">Download the evidence bundle</a> to check it independently.')
+                f'<br><a href="/orders/{e(o["id"], quote=True)}/evidence.json">Download the evidence bundle</a> to check it independently, then <a href="/check-receipt/">load it in the receipt checker</a>.')
         if o["status"] in ("failed", "expired") and csrf:
             out += ('<form method="post" action="/agents/retry" style="margin-top:10px">'
                     f'<input type="hidden" name="csrf" value="{e(csrf, quote=True)}"><input type="hidden" name="order" value="{e(o["id"], quote=True)}">'
@@ -1242,6 +1246,8 @@ class DemoHandler(http.server.BaseHTTPRequestHandler):
         elif p.path.startswith("/treasury/visa/"): self._visa_record(p.path)
         elif p.path == "/treasury/agents": self._all_agents()
         elif re.fullmatch(r"/treasury/agents/agt_[0-9a-f]{12}", p.path): self._admin_agent(p.path)
+        elif p.path == "/check-receipt": _redirect(self, "/check-receipt/")
+        elif p.path.startswith("/check-receipt/"): self._check_receipt(p.path)
         elif p.path.startswith("/static/"): self._static(p.path)
         else: _html(self, "<h1>404</h1>", 404)
 
@@ -2377,6 +2383,24 @@ class DemoHandler(http.server.BaseHTTPRequestHandler):
         _redirect(self, f"{LOGOUT_ENDPOINT}?{params}",
                   extra_headers=[("Set-Cookie",
                                   "sid=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0")])
+
+    # ── /check-receipt/  (public, standalone: verifies receipts in the visitor's browser) ──
+    def _check_receipt(self, path):
+        name = path[len("/check-receipt/"):] or "index.html"
+        mime = CHECK_FILES.get(name)
+        full = CHECK_DIR / name
+        if not mime or not full.is_file():
+            _html(self, "<h1>404</h1>", 404)
+            return
+        data = full.read_bytes()
+        self.send_response(200)
+        self.send_header("Content-Type", mime)
+        self.send_header("Content-Length", str(len(data)))
+        self.send_header("Cache-Control", "no-cache")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("Referrer-Policy", "no-referrer")
+        self.end_headers()
+        self.wfile.write(data)
 
     # ── /static/* ─────────────────────────────────────────────────────────────
     def _static(self, path):

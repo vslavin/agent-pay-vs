@@ -1,0 +1,118 @@
+{
+  "version": "agent-pay-evidence/1",
+  "generatedAt": "2026-11-14T18:01:00.000Z",
+  "_example": {
+    "note": "Synthetic example. Every key here was generated for this file; the \"Keycloak\" that signed the sign-in proofs is a throwaway stand-in. The transaction does not exist on any network.",
+    "chainReceipt": {
+      "status": "success",
+      "logs": [
+        {
+          "address": "0x20c0000000000000000000006a37da5c996874be",
+          "topics": [
+            "0x57bc7354aa85aed339e000bccffabbc529466af35f0772c8f8ee1145927de7f0",
+            "0x0000000000000000000000001111111111111111111111111111111111111111",
+            "0x0000000000000000000000002222222222222222222222222222222222222222",
+            "0x6f72645f37633431653061396233643500000000000000000000000000000000"
+          ],
+          "data": "0x000000000000000000000000000000000000000000000000000000001908b100"
+        }
+      ]
+    }
+  },
+  "order": {
+    "id": "ord_7c41e0a9b3d5",
+    "merchant": "luxe",
+    "sku": "LUX-001",
+    "item": "Meridian 38",
+    "amount": "420",
+    "currency": "OUSD",
+    "status": "paid",
+    "createdAt": "2026-11-14T18:00:00.000Z",
+    "paidAt": "2026-11-14T18:00:20.000Z",
+    "txHash": "0x5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c",
+    "quantity": 1
+  },
+  "mandates": {
+    "open": "eyJhbGciOiJFZERTQSIsInR5cCI6ImFwMi1tYW5kYXRlLW9wZW4rand0Iiwia2lkIjoia3VYeDJzdUVXU0xTTXRoSElPcXBlc1hGeVZTcWlhQ3d6WVZoVUU0azg5TSJ9.eyJ2Y3QiOiJtYW5kYXRlLnBheW1lbnQub3Blbi4xIiwianRpIjoibW5kXzVlMWE3N2MwYjlkMiIsImlzcyI6ImExYjJjM2Q0LTAwMDAtNDAwMC04MDAwLWV4YW1wbGUwMDAwMSIsInN1YiI6ImFndF85ZjNjMmE3MWQ0ZTUiLCJpYXQiOjE3OTQ2NzU2MDAsImV4cCI6MTc5NDc2MjAwMCwiY25mIjp7Imp3ayI6eyJrdHkiOiJPS1AiLCJjcnYiOiJFZDI1NTE5IiwieCI6IjVWeXBsOEFib3JSOEQyWEljamtUYjhBeTIxclp0bU1XbHFiSFp6c1BDSG8ifX0sImNvbnN0cmFpbnRzIjpbeyJ0eXBlIjoicGF5bWVudC5hbGxvd2VkX3BheWVlcyIsImFsbG93ZWQiOlt7ImlkIjoibHV4ZSIsIm5hbWUiOiJMdXhlIn1dfSx7InR5cGUiOiJwYXltZW50LmFtb3VudF9yYW5nZSIsImN1cnJlbmN5IjoiT1VTRCIsIm1pbiI6MCwibWF4Ijo1MDAwMDAwMDB9LHsidHlwZSI6InBheW1lbnQuYnVkZ2V0IiwiY3VycmVuY3kiOiJPVVNEIiwibWF4IjoxMDAwMDAwMDAwfV19.mYkrONL9ibOdhsLLJ1iH8G4eC1X7A5gmGir2b89xxQ9-yxoZ2RyKjeoXzn4iKxsSErskiIig1ai1UH1LlGsXCw",
+    "closed": "eyJhbGciOiJFZERTQSIsInR5cCI6ImFwMi1tYW5kYXRlLWNsb3NlZCtqd3QiLCJraWQiOiJOUzVOQXBTMHpiWnhzTEk4M25oOUpZM1hPVlczN2piQ0tiVG12TGhTQzJ3In0.eyJ2Y3QiOiJtYW5kYXRlLnBheW1lbnQuMSIsImp0aSI6ImNsc182MTlhYWYxNDJjZjkiLCJpYXQiOjE3OTQ2NzkyMDAsImV4cCI6MTc5NDY3OTUwMCwibm9uY2UiOiJ2Z0xlc2RId09VVWhja3ZxIiwib3BlbiI6InNwRkpqYlBFZTI5ZXVYWWlpanQ1ZUhZX3RfZ1JqeE1PWnROdktYYmkySFUiLCJ0cmFuc2FjdGlvbl9pZCI6InNkbEo3aFkxa2NJNVBJRm40SkRyeWV2bHN1Q0lvakpGU3MtQ0lUZnFqcFUiLCJwYXllZSI6eyJpZCI6Imx1eGUiLCJhZGRyZXNzIjoiMHgyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyIn0sInBheW1lbnRfYW1vdW50Ijp7ImFtb3VudCI6NDIwMDAwMDAwLCJjdXJyZW5jeSI6Ik9VU0QifX0.3XS4lLwR85EATivsq3sHtT5sXNS_6s5qPtwe4dO6SfnExT00xljjNMWAc5vt_fuNKwMxCV1NXZO2CUvejGcLCw"
+  },
+  "request": {
+    "authority": "agent-pay.example",
+    "path": "/shop/luxe/checkout",
+    "headers": {
+      "signature-input": "sig2=(\"@authority\" \"@path\");created=1794679200;keyid=\"NS5NApS0zbZxsLI83nh9JY3XOVW37jbCKbTmvLhSC2w\";alg=\"Ed25519\";expires=1794679500;nonce=\"8oquT47P0UuRDvX1zqv5B000Go9J9e6p\";tag=\"agent-payer-auth\"",
+      "signature": "sig2=:rLdurqIi2Xmsk8S/9hKwxV9n1ZmbeRA8eM9/RWZC2PYJDqj8ux+iF9fDTV2TUpNj/EHjh8+ZSVzhvRmDLyxOBQ==:"
+    }
+  },
+  "receipts": {
+    "mandate": "eyJhbGciOiJFZERTQSIsInR5cCI6ImFwMi1tYW5kYXRlLXJlY2VpcHQrand0Iiwia2lkIjoiSmRDRXh4REk0NzdUblAwNktHSTYwTkMta1hmWWVaMTBXVXdsQmJIVTBRYyJ9.eyJpc3MiOiJodHRwczovL2FnZW50LXBheS5leGFtcGxlL3Nob3AvbHV4ZSIsImlhdCI6MTc5NDY3OTIwMCwicmVzdWx0Ijoic3VjY2VzcyIsInJlZmVyZW5jZSI6IjktNmxjc1BQakhJWEd2ZG9RYWo2WTBJSUgyY3JmUVI1Y1dtbzdjX2NYSVEifQ.pmELnfilxIQ0WYf2BzEN9DG7lfc65qPLODe6n54E3ikmnxU1zUL7gjtJvIVcdsWhFMyVJUgLfrkc7pmuBPNCCQ",
+    "payment": "eyJhbGciOiJFZERTQSIsInR5cCI6ImFwMi1wYXltZW50LXJlY2VpcHQrand0Iiwia2lkIjoiSmRDRXh4REk0NzdUblAwNktHSTYwTkMta1hmWWVaMTBXVXdsQmJIVTBRYyJ9.eyJpc3MiOiJodHRwczovL2FnZW50LXBheS5leGFtcGxlL3Nob3AvbHV4ZSIsImlhdCI6MTc5NDY3OTIyMCwic3RhdHVzIjoiU3VjY2VzcyIsInJlZmVyZW5jZSI6IjktNmxjc1BQakhJWEd2ZG9RYWo2WTBJSUgyY3JmUVI1Y1dtbzdjX2NYSVEiLCJwYXltZW50X2lkIjoib3JkXzdjNDFlMGE5YjNkNSIsIm5ldHdvcmtfY29uZmlybWF0aW9uX2lkIjoiMHg1YzVjNWM1YzVjNWM1YzVjNWM1YzVjNWM1YzVjNWM1YzVjNWM1YzVjNWM1YzVjNWM1YzVjNWM1YzVjNWM1YzVjIn0.iJwzP6aTfhAfP09qBYsTpcJsg872GJRgSEvaY5rtKMR1BcS_kITw30D_KV4ijoFwe9SVlR9Cj131KI9TDN5XDQ"
+  },
+  "grant": {
+    "proof": {
+      "idToken": "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCIsImtpZCI6ImV4YW1wbGUta2V5LTEifQ.eyJpc3MiOiJodHRwczovL2xvZ2luLmFnZW50LXBheS5leGFtcGxlL3JlYWxtcy9kZW1vIiwiYXVkIjoiZGVtby1hcHAiLCJpYXQiOjE3OTQ2NzkxOTUsImV4cCI6MTc5NDY3OTUwMCwiYW1yIjpbIndlYmF1dGhuIl0sInN1YiI6ImExYjJjM2Q0LTAwMDAtNDAwMC04MDAwLWV4YW1wbGUwMDAwMSIsImF1dGhfdGltZSI6MTc5NDY3NTU3MCwibm9uY2UiOiJQbWdGQlNraUd5TWlTaE41bGdkcjVnZGhwRWVlVGdXaUFxZEFvOGNVTy1FIn0.H6AFXLraZ3g_A_emCCbprSqSR1_y96qsvy-yjPtQTZXIjAjVSFykpmCKQQfYnTsAhRPHCb6wAwC-wIw5hH4nsAexswC31A8Te3REz5InoQDyUcpbpSNajPIi8cLAmpDV0BXu83-QmEbRCb0MnAyDWvWDQaLuBM-5W-aTjyoYbNOkO_BZpsxsrb1-ORa0XQSIbpqBN9GKHORV0jI_rPqQbJgf5whMi8v1b-E_Aqwq_rflwSnReh90D20U84x7-twVT9GKL_xclhs4t8e8aUa94yT9VMpf-SBPQbU6mpvXWaDG-cTKTKKa3AL6PBTYNqP4St4NKA6ggTUP5VsEbdjjYQ"
+    }
+  },
+  "approval": {
+    "id": "apr_3d8b0c6e1f47",
+    "createdAt": "2026-11-14T17:59:40.000Z",
+    "decidedAt": "2026-11-14T18:00:08.000Z",
+    "proof": {
+      "idToken": "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCIsImtpZCI6ImV4YW1wbGUta2V5LTEifQ.eyJpc3MiOiJodHRwczovL2xvZ2luLmFnZW50LXBheS5leGFtcGxlL3JlYWxtcy9kZW1vIiwiYXVkIjoiZGVtby1hcHAiLCJpYXQiOjE3OTQ2NzkxOTUsImV4cCI6MTc5NDY3OTUwMCwiYW1yIjpbIndlYmF1dGhuIl0sInN1YiI6ImExYjJjM2Q0LTAwMDAtNDAwMC04MDAwLWV4YW1wbGUwMDAwMSIsImF1dGhfdGltZSI6MTc5NDY3OTE5Niwibm9uY2UiOiJBSmFHZHVqTEJlUzN2ZVdIQURKT3B3MkxNbzZodUQ5N0p2Vy1rSXM2ZWtjIn0.BFKKnEtnC-dxMXvQROuTbVrCSOzGk4fsFhCoOJIpsiCvuwejXz1HiqrJRsdlwQ_sVsle9ok4hMIComSNR9KuQjLnDBq_R-ZrlxSVhzCjIXFoGlxuGXTDw8WnZh1wGpqhjU-mrqBxqFuGsGUWi3bkMew2thbA42bfg_zsHXcMeYNEM6Qsgs43IpuCbU1lIEBhm5gXGbR6mfNG14Y-hxLDz5C1HbLxqNcgnQ-O9POXhoCTKxaWDR3pGSnxOnW18Mca3qfvZS-KlBN7ThACSKRvCZX-p3mLuJy0i3JM4TqFFV0W4hqA4DI-RuHk8G1OsZ0Eaw6gAknI1xcp_JcfJNVyeA"
+    }
+  },
+  "chain": {
+    "network": "Example network",
+    "chainId": 0,
+    "rpc": "https://rpc.example.invalid",
+    "token": "0x20c0000000000000000000006a37da5c996874be",
+    "payer": "0x1111111111111111111111111111111111111111",
+    "payee": "0x2222222222222222222222222222222222222222",
+    "txHash": "0x5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c5c",
+    "blockNumber": null
+  },
+  "keys": {
+    "user": {
+      "sub": "a1b2c3d4-0000-4000-8000-example00001",
+      "jwk": {
+        "kty": "OKP",
+        "crv": "Ed25519",
+        "x": "L2uaFguy_PbWHoOuyH1voyDN02yISRRqjJtb-dYkkgs"
+      }
+    },
+    "agent": {
+      "id": "agt_9f3c2a71d4e5",
+      "kid": "NS5NApS0zbZxsLI83nh9JY3XOVW37jbCKbTmvLhSC2w",
+      "jwk": {
+        "kty": "OKP",
+        "crv": "Ed25519",
+        "x": "5Vypl8AborR8D2XIcjkTb8Ay21rZtmMWlqbHZzsPCHo"
+      }
+    },
+    "store": {
+      "username": "luxe",
+      "kid": "JdCExxDI477TnP06KGI60NC-kXfYeZ10WUwlBbHU0Qc",
+      "jwk": {
+        "kty": "OKP",
+        "crv": "Ed25519",
+        "x": "1spDQSwcbwn6Co5eY3VTchw3hQXq5EaVyR0_qL5mxc0"
+      }
+    },
+    "oidc": {
+      "issuer": "https://login.agent-pay.example/realms/demo",
+      "audience": "demo-app",
+      "jwks": {
+        "keys": [
+          {
+            "kty": "RSA",
+            "n": "jiRQN7UkMUTxl465J2b6LONLPDJzfgQ2OUzbi8E73eulgpqUPKYoHqbWRLvoBB0P1hHew2hiheCKQsrBoPmzDXng1KcyfqY0UEa8mIfmolMP143M95aRWMCOsXvJnN6aSVmoWBZeknoym-y0SClkwYWHOT-JAEKRUugA4OS5bU2Q3epqgL7lIg6ZXiwW5t36WFhS3M6jg1gYq_ew5RT6IdtT-NCmUrd0KPjnlaJOfprPif_bi_lJyl5AmQ8MnbvwFqHqeEjhzszrVK3QXv-hznhYLzMdZBMWihFg-ULdc_In8psVLB7AbzFjOrw0vI9XrVb8wsFMEcW8FBhd8g7BXQ",
+            "e": "AQAB",
+            "kid": "example-key-1",
+            "use": "sig",
+            "alg": "RS256"
+          }
+        ]
+      }
+    }
+  }
+}

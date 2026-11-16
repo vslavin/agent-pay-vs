@@ -1,0 +1,12 @@
+{
+  "name": "check-receipt",
+  "version": "1.0.0",
+  "description": "Public page that checks Agent Pay receipts, mandates and sign-in proofs in the browser",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test test/",
+    "example": "node tools/make-example.mjs"
+  },
+  "license": "ISC"
+}
